@@ -2,16 +2,22 @@
 //!
 //! The cursor must rest in the hot zone (where the pill normally sits) for
 //! [`DWELL`] before the notch shows up as a plain pill; the normal hover
-//! logic takes over from there. It hides again once the pointer has left the
-//! zone and the panel is closed.
+//! logic takes over from there. It hides again once the pointer has been out
+//! of the zone, with the panel closed, for [`GRACE`].
 
 /// How long the cursor must rest in the hot zone before the notch reveals.
 pub const DWELL: f64 = 0.4;
+/// How long a revealed notch stays after the pointer leaves (matches the
+/// default collapse grace; also covers the hovered pill's swell, which pokes
+/// a few pixels out of the zone).
+pub const GRACE: f64 = 0.25;
 
 #[derive(Default)]
 pub struct Reveal {
     /// When the cursor entered the hot zone while still hidden.
     since: Option<f64>,
+    /// When a revealed notch lost both the pointer and the open panel.
+    left: Option<f64>,
     revealed: bool,
 }
 
@@ -30,7 +36,12 @@ impl Reveal {
         if !hidden_for_fullscreen || !enabled {
             *self = Self::default();
         } else if self.revealed {
-            self.revealed = in_zone || shell_open;
+            if in_zone || shell_open {
+                self.left = None;
+            } else if now - *self.left.get_or_insert(now) >= GRACE {
+                self.revealed = false;
+                self.left = None;
+            }
         } else if !in_zone {
             self.since = None;
         } else if now - *self.since.get_or_insert(now) >= DWELL {
@@ -40,9 +51,11 @@ impl Reveal {
         self.revealed
     }
 
-    /// When a frame is needed to finish the dwell.
+    /// When a frame is needed to finish the dwell or the grace.
     pub fn wake_at(&self) -> Option<f64> {
-        self.since.map(|s| s + DWELL)
+        self.since
+            .map(|s| s + DWELL)
+            .or(self.left.map(|l| l + GRACE))
     }
 }
 
@@ -80,9 +93,27 @@ mod tests {
         assert!(r.update(1.0, true, true, true, false));
         // Pointer on the panel, away from the zone: still revealed.
         assert!(r.update(2.0, true, true, false, true));
-        // Panel closed and pointer gone: hidden again, and needs a new dwell.
-        assert!(!r.update(3.0, true, true, false, false));
-        assert!(!r.update(3.1, true, true, true, false));
+        // Panel closed and pointer gone: stays for GRACE, then hides, and
+        // needs a new dwell.
+        assert!(r.update(3.0, true, true, false, false));
+        assert_eq!(r.wake_at(), Some(3.0 + GRACE));
+        assert!(!r.update(3.0 + GRACE, true, true, false, false));
+        assert!(!r.update(3.4, true, true, true, false));
+    }
+
+    #[test]
+    fn brief_exit_within_grace_keeps_it_revealed() {
+        let mut r = Reveal::default();
+        r.update(0.0, true, true, true, false);
+        assert!(r.update(0.4, true, true, true, false));
+        // Pointer slips into the hovered pill's swell, just outside the zone.
+        assert!(r.update(0.5, true, true, false, false));
+        assert!(r.update(0.6, true, true, true, false));
+        assert_eq!(r.wake_at(), None);
+        // A later full exit still gets the whole grace.
+        assert!(r.update(1.0, true, true, false, false));
+        assert!(r.update(1.2, true, true, false, false));
+        assert!(!r.update(1.25, true, true, false, false));
     }
 
     #[test]
