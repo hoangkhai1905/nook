@@ -13,6 +13,7 @@
 //! with those settings and the last few captures, which reopen in the
 //! editor.
 
+use crate::kit;
 use crate::shot_editor::{self, Editor};
 use crate::snipper::Snipper;
 use egui::{
@@ -30,6 +31,7 @@ use std::time::{Duration, Instant};
 const HINT: &str = "Drag a region  \u{00B7}  Click a window  \u{00B7}  F screen  \u{00B7}  A all screens  \u{00B7}  Esc to cancel";
 const DELAYS: [u64; 4] = [0, 3, 5, 10];
 const DELAY_LABELS: [&str; 4] = ["Off", "3 s", "5 s", "10 s"];
+const SETTINGS: &str = "screenshot.txt";
 /// Captures kept for the page.
 const RECENT: usize = 4;
 /// Thumbnail edge, pixels.
@@ -46,6 +48,28 @@ pub enum After {
 impl After {
     const ALL: [After; 3] = [After::Edit, After::Copy, After::Save];
     const LABELS: [&str; 3] = ["Edit", "Copy", "Save"];
+
+    /// Stable name stored in the settings file.
+    fn as_str(self) -> &'static str {
+        match self {
+            After::Edit => "edit",
+            After::Copy => "copy",
+            After::Save => "save",
+        }
+    }
+
+    /// Unknown names fall back to the default.
+    fn from_name(s: &str) -> After {
+        After::ALL
+            .into_iter()
+            .find(|a| a.as_str() == s)
+            .unwrap_or_default()
+    }
+}
+
+/// Index into `DELAYS` for a delay in seconds.
+fn delay_index(secs: u64) -> Option<usize> {
+    DELAYS.iter().position(|&d| d == secs)
 }
 
 struct Recent {
@@ -93,6 +117,31 @@ fn thumbnail(frame: &Frame) -> ColorImage {
 }
 
 impl Screenshot {
+    fn load_settings(&mut self) {
+        for (k, v) in kit::read_settings(SETTINGS) {
+            match k.as_str() {
+                "after" => self.after = After::from_name(&v),
+                // A value not in DELAYS keeps the default (Off).
+                "delay" => {
+                    if let Some(i) = v.parse().ok().and_then(delay_index) {
+                        self.delay = i;
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+
+    fn save_settings(&self) {
+        kit::write_settings(
+            SETTINGS,
+            &[
+                ("after", self.after.as_str().to_owned()),
+                ("delay", DELAYS[self.delay].to_string()),
+            ],
+        );
+    }
+
     fn start(&mut self) {
         if self.pending.take().is_some() {
             // A second press cancels the countdown.
@@ -181,6 +230,7 @@ impl Module for Screenshot {
     fn attach(&mut self, ctx: &egui::Context) {
         self.snipper.attach(ctx);
         self.repaint = Some(ctx.clone());
+        self.load_settings();
     }
 
     fn is_active(&self) -> bool {
@@ -296,7 +346,9 @@ impl Module for Screenshot {
         let y0 = body.min.y + 14.0;
         label(ui, y0, "Delay");
         let mut rui = ui.new_child(egui::UiBuilder::new().max_rect(row(y0)));
-        widgets::segmented(&mut rui, &DELAY_LABELS, &mut self.delay, theme);
+        if widgets::segmented(&mut rui, &DELAY_LABELS, &mut self.delay, theme).changed() {
+            self.save_settings();
+        }
         let y1 = y0 + 34.0;
         label(ui, y1, "After capture");
         let mut after = After::ALL
@@ -306,6 +358,7 @@ impl Module for Screenshot {
         let mut rui = ui.new_child(egui::UiBuilder::new().max_rect(row(y1)));
         if widgets::segmented(&mut rui, &After::LABELS, &mut after, theme).changed() {
             self.after = After::ALL[after];
+            self.save_settings();
         }
         ui.painter().text(
             pos2(body.max.x, y1),
@@ -395,6 +448,23 @@ impl Module for Screenshot {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn after_names_round_trip() {
+        for a in After::ALL {
+            assert_eq!(After::from_name(a.as_str()), a);
+        }
+        assert_eq!(After::from_name("bogus"), After::default());
+        assert_eq!(After::from_name(""), After::default());
+    }
+
+    #[test]
+    fn delay_must_be_a_listed_value() {
+        for (i, d) in DELAYS.into_iter().enumerate() {
+            assert_eq!(delay_index(d), Some(i));
+        }
+        assert_eq!(delay_index(7), None);
+    }
 
     #[test]
     fn thumbnails_box_filter_and_fit() {
