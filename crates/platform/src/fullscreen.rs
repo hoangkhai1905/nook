@@ -8,15 +8,23 @@ use windows::Win32::UI::Shell::{
     QUNS_PRESENTATION_MODE, QUNS_RUNNING_D3D_FULL_SCREEN, SHQueryUserNotificationState,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetClassNameW, GetForegroundWindow, GetShellWindow, GetWindowRect, GetWindowThreadProcessId,
-    IsWindowVisible, IsZoomed,
+    GWL_STYLE, GetClassNameW, GetForegroundWindow, GetShellWindow, GetWindowLongPtrW,
+    GetWindowRect, GetWindowThreadProcessId, IsWindowVisible, IsZoomed, WS_CAPTION,
 };
 
+/// Whether a window that covers the notch's monitor is fullscreen. A
+/// maximized window with a title bar is not (on a monitor without a taskbar
+/// it covers everything too), but browser video fullscreen is a maximized
+/// window *without* one, so that still counts.
+fn covering_window_is_fullscreen(zoomed: bool, has_caption: bool) -> bool {
+    !(zoomed && has_caption)
+}
+
 /// True when the foreground window covers the whole monitor the notch is on
-/// (borderless fullscreen) or the shell reports exclusive D3D fullscreen /
-/// presentation mode. Maximized windows, windows on other monitors (a
-/// maximized window on a monitor without a taskbar covers it too), the
-/// desktop and our own windows (e.g. the draw-on-screen overlay) never count.
+/// (borderless fullscreen, including a maximized window without a title bar)
+/// or the shell reports exclusive D3D fullscreen / presentation mode.
+/// Ordinary maximized windows, windows on other monitors, the desktop and our
+/// own windows (e.g. the draw-on-screen overlay) never count.
 pub fn foreground_is_fullscreen(own: Hwnd) -> bool {
     // SAFETY: read-only shell query.
     if let Ok(state) = unsafe { SHQueryUserNotificationState() }
@@ -31,7 +39,11 @@ pub fn foreground_is_fullscreen(own: Hwnd) -> bool {
         if fg.is_invalid() || fg == own.get() || fg == GetShellWindow() {
             return false;
         }
-        if !IsWindowVisible(fg).as_bool() || IsZoomed(fg).as_bool() {
+        if !IsWindowVisible(fg).as_bool() {
+            return false;
+        }
+        let has_caption = GetWindowLongPtrW(fg, GWL_STYLE) as u32 & WS_CAPTION.0 == WS_CAPTION.0;
+        if !covering_window_is_fullscreen(IsZoomed(fg).as_bool(), has_caption) {
             return false;
         }
         let mut pid = 0;
@@ -56,5 +68,22 @@ pub fn foreground_is_fullscreen(own: Hwnd) -> bool {
             return false;
         };
         mon.bounds == ours.bounds && Rect::from(r).covers(&mon.bounds)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn maximized_counts_only_without_title_bar() {
+        // Borderless game (TFT): not maximized, no title bar.
+        assert!(covering_window_is_fullscreen(false, false));
+        // Edge/YouTube video fullscreen: maximized, no title bar.
+        assert!(covering_window_is_fullscreen(true, false));
+        // Ordinary maximized window (e.g. on a monitor without a taskbar).
+        assert!(!covering_window_is_fullscreen(true, true));
+        // A captioned window sized over the monitor but not maximized.
+        assert!(covering_window_is_fullscreen(false, true));
     }
 }
