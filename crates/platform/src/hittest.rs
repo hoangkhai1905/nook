@@ -93,7 +93,10 @@ fn any_button_down() -> bool {
 
 struct Shared {
     shape: Mutex<HitShape>,
+    /// Where a hidden notch reveals on hover. Never affects click-through.
+    hot_zone: Mutex<HitShape>,
     inside: AtomicBool,
+    in_hot_zone: AtomicBool,
     stop: AtomicBool,
 }
 
@@ -110,7 +113,9 @@ impl HitTester {
     pub fn spawn(hwnd: Hwnd, on_change: impl Fn(bool) + Send + 'static) -> Result<Self> {
         let shared = Arc::new(Shared {
             shape: Mutex::new(HitShape::default()),
+            hot_zone: Mutex::new(HitShape::default()),
             inside: AtomicBool::new(false),
+            in_hot_zone: AtomicBool::new(false),
             stop: AtomicBool::new(false),
         });
         let s = shared.clone();
@@ -129,6 +134,24 @@ impl HitTester {
         if *cur != shape {
             *cur = shape;
         }
+    }
+
+    /// Sets the hot zone (empty to disable). The poller calls `on_change`
+    /// when the cursor enters or leaves it, but the window stays click-through.
+    pub fn set_hot_zone(&self, zone: HitShape) {
+        let mut cur = self
+            .shared
+            .hot_zone
+            .lock()
+            .unwrap_or_else(|p| p.into_inner());
+        if *cur != zone {
+            *cur = zone;
+        }
+    }
+
+    /// Whether the cursor is in the hot zone.
+    pub fn in_hot_zone(&self) -> bool {
+        self.shared.in_hot_zone.load(Ordering::Relaxed)
     }
 
     /// Whether the window should take mouse input: the cursor is inside the
@@ -161,6 +184,15 @@ fn run(shared: &Shared, hwnd: Hwnd, on_change: impl Fn(bool)) {
             let shape = shared.shape.lock().unwrap_or_else(|e| e.into_inner());
             (ok && shape.contains(p), ok && shape.near(p, 48.0))
         };
+        let hot = ok
+            && shared
+                .hot_zone
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .contains(p);
+        if shared.in_hot_zone.swap(hot, Ordering::Relaxed) != hot {
+            on_change(interactive);
+        }
         // Keep input while a button is held over us (press, drag): the
         // window has mouse capture and expects the matching release.
         let hold = interactive && any_button_down();

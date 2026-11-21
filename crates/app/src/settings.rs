@@ -256,6 +256,17 @@ pub fn page(
                 cfg.hide_in_fullscreen = hide;
                 out.changed = true;
             }
+            let mut reveal_on = cfg.reveal_on_hover;
+            if row(&mut lui, "Reveal on hover", theme, |ui| {
+                if !cfg.hide_in_fullscreen {
+                    ui.disable();
+                }
+                widgets::toggle(ui, &mut reveal_on, theme)
+                    .on_hover_text("Rest the cursor where the notch sits to bring it back")
+            }) {
+                cfg.reveal_on_hover = reveal_on;
+                out.changed = true;
+            }
 
             let mut rui = card_ui(ui, right);
             section_title(&mut rui, "Behavior", theme);
