@@ -215,8 +215,17 @@ impl Config {
     pub fn load() -> Result<Self> {
         let path = path()?;
         match std::fs::read_to_string(&path) {
-            Ok(text) => match toml::from_str::<Config>(&text) {
-                Ok(cfg) => Ok(cfg),
+            Ok(text) => match parse_lenient(&text) {
+                Ok((cfg, dropped)) => {
+                    if !dropped.is_empty() {
+                        // The app only saves on a settings change, not on exit,
+                        // so without this the bad values would sit in the file
+                        // (and warn) until then. Keep the original beside it.
+                        let _ = std::fs::copy(&path, path.with_extension("toml.bad"));
+                        cfg.save()?;
+                    }
+                    Ok(cfg)
+                }
                 Err(e) => {
                     tracing::error!("config parse error, using defaults: {e}");
                     let _ = std::fs::rename(&path, path.with_extension("toml.bad"));
@@ -244,6 +253,54 @@ impl Config {
         std::fs::write(&tmp, text).with_context(|| format!("writing {}", tmp.display()))?;
         std::fs::rename(&tmp, &path).with_context(|| format!("replacing {}", path.display()))?;
         Ok(())
+    }
+}
+
+/// Parses `text` keeping every valid value. Invalid ones fall back to their
+/// default and are returned as `key.path = value` strings. Only text that is
+/// not TOML at all is an error.
+fn parse_lenient(text: &str) -> Result<(Config, Vec<String>), toml::de::Error> {
+    let user: toml::Table = text.parse()?;
+    let mut merged = toml::Table::try_from(Config::default()).expect("default config serializes");
+    let mut dropped = Vec::new();
+    merge(&mut merged, &[], user, &mut dropped);
+    let cfg = toml::Value::Table(merged).try_into().unwrap_or_default();
+    Ok((cfg, dropped))
+}
+
+/// Inserts each `user` entry under `path` in `root` if `root` still
+/// deserializes as a `Config`; a rejected table is retried key by key.
+fn merge(root: &mut toml::Table, path: &[String], user: toml::Table, dropped: &mut Vec<String>) {
+    for (key, val) in user {
+        let mut here = path.to_vec();
+        here.push(key.clone());
+        let table = here[..here.len() - 1]
+            .iter()
+            .fold(&mut *root, |t, k| t[k].as_table_mut().expect("table"));
+        let old = table.insert(key.clone(), val.clone());
+        if toml::Value::Table(root.clone())
+            .try_into::<Config>()
+            .is_ok()
+        {
+            continue;
+        }
+        let table = here[..here.len() - 1]
+            .iter()
+            .fold(&mut *root, |t, k| t[k].as_table_mut().expect("table"));
+        // Put the default back (or nothing, for keys the default omits).
+        match old {
+            Some(o) => table.insert(key, o),
+            None => table.remove(&key),
+        };
+        match (val, table.get(here.last().expect("key"))) {
+            (toml::Value::Table(sub), Some(toml::Value::Table(_))) => {
+                merge(root, &here, sub, dropped)
+            }
+            (val, _) => {
+                tracing::warn!("config: ignoring invalid {} = {val}", here.join("."));
+                dropped.push(format!("{} = {val}", here.join(".")));
+            }
+        }
     }
 }
 
@@ -321,5 +378,67 @@ mod tests {
         let cfg: Config = toml::from_str("placement = \"right\"\non_top = false").expect("parse");
         assert_eq!(cfg.placement, Placement::Right);
         assert!(!cfg.on_top);
+    }
+
+    fn lenient(text: &str) -> (Config, Vec<String>) {
+        parse_lenient(text).expect("valid toml")
+    }
+
+    #[test]
+    fn bad_enum_keeps_other_fields() {
+        let (cfg, dropped) = lenient(
+            "material = \"bogus\"
+hover_delay_ms = 300",
+        );
+        assert_eq!(cfg.material, Material::Acrylic);
+        assert_eq!(cfg.hover_delay_ms, 300);
+        assert_eq!(dropped.len(), 1);
+        assert!(dropped[0].starts_with("material"));
+    }
+
+    #[test]
+    fn bad_tile_size_keeps_other_sizes_and_order() {
+        let text = "[modules]
+order = [\"timer\", \"notes\"]
+[modules.sizes]
+timer = \"wide\"
+notes = \"huge??\"
+";
+        let (cfg, dropped) = lenient(text);
+        assert_eq!(cfg.modules.order, ["timer", "notes"]);
+        assert_eq!(cfg.modules.sizes.len(), 1);
+        assert_eq!(cfg.modules.sizes.get("timer"), Some(&TileSize::Wide));
+        assert_eq!(dropped.len(), 1);
+        assert!(dropped[0].starts_with("modules.sizes.notes"));
+    }
+
+    #[test]
+    fn wrong_type_resets_only_that_field() {
+        let (cfg, dropped) = lenient(
+            "glass_opacity = 300
+grain = 10
+hover_delay_ms = 1.5",
+        );
+        assert_eq!(cfg.glass_opacity, DEFAULT_GLASS_OPACITY);
+        assert_eq!(cfg.grain, 10);
+        assert_eq!(cfg.hover_delay_ms, 120);
+        assert_eq!(dropped.len(), 2);
+    }
+
+    #[test]
+    fn valid_file_round_trips_unchanged() {
+        let mut cfg = Config {
+            theme: ThemeMode::Dark,
+            ..Config::default()
+        };
+        cfg.modules.sizes.insert("timer".into(), TileSize::Wide);
+        let (back, dropped) = lenient(&toml::to_string_pretty(&cfg).expect("ser"));
+        assert!(dropped.is_empty());
+        assert_eq!(back, cfg);
+    }
+
+    #[test]
+    fn broken_syntax_is_an_error() {
+        assert!(parse_lenient("theme = \"dark").is_err());
     }
 }
