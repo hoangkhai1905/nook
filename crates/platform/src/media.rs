@@ -21,12 +21,21 @@ use windows::Storage::Streams::DataReader;
 use windows::Win32::Foundation::{CloseHandle, HWND, LPARAM};
 use windows::Win32::Graphics::Dwm::{DWMWA_CLOAKED, DwmGetWindowAttribute};
 use windows::Win32::Storage::EnhancedStorage::PKEY_AppUserModel_ID;
-use windows::Win32::System::Com::CoTaskMemFree;
 use windows::Win32::System::Com::StructuredStorage::PropVariantToStringAlloc;
+use windows::Win32::System::Com::{
+    CLSCTX_INPROC_SERVER, COINIT_MULTITHREADED, CoCreateInstance, CoInitializeEx, CoTaskMemFree,
+};
 use windows::Win32::System::Threading::{
     OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
 };
+use windows::Win32::System::Variant::VARIANT;
 use windows::Win32::System::WinRT::{RO_INIT_MULTITHREADED, RoInitialize};
+use windows::Win32::UI::Accessibility::{
+    CUIAutomation, IUIAutomation, IUIAutomationInvokePattern,
+    IUIAutomationLegacyIAccessiblePattern, IUIAutomationSelectionItemPattern,
+    TreeScope_Descendants, UIA_ControlTypePropertyId, UIA_InvokePatternId,
+    UIA_LegacyIAccessiblePatternId, UIA_SelectionItemPatternId, UIA_TabItemControlTypeId,
+};
 use windows::Win32::UI::Shell::PropertiesSystem::{IPropertyStore, SHGetPropertyStoreForWindow};
 use windows::Win32::UI::WindowsAndMessaging::{
     EnumWindows, GWL_EXSTYLE, GetWindowLongPtrW, GetWindowTextW, GetWindowThreadProcessId,
@@ -427,8 +436,63 @@ fn pick_window(candidates: &[(bool, String)], media_title: &str) -> Option<usize
     Some(by_title.unwrap_or(first))
 }
 
+/// Index of the first tab whose name contains the media title
+/// (case-insensitive, so "<title> - YouTube - Audio playing" still matches).
+fn pick_tab(names: &[String], title: &str) -> Option<usize> {
+    let needle = title.trim().to_lowercase();
+    if needle.is_empty() {
+        return None;
+    }
+    names
+        .iter()
+        .position(|n| n.to_lowercase().contains(&needle))
+}
+
+/// Selects the browser tab titled like `title` in `hwnd` through UI
+/// Automation. True if a tab was found and selected.
+fn select_tab(uia: &IUIAutomation, hwnd: HWND, title: &str) -> windows::core::Result<bool> {
+    // SAFETY: COM calls on interfaces owned by this thread.
+    unsafe {
+        let root = uia.ElementFromHandle(hwnd)?;
+        let cond = uia.CreatePropertyCondition(
+            UIA_ControlTypePropertyId,
+            &VARIANT::from(UIA_TabItemControlTypeId.0),
+        )?;
+        let tabs = root.FindAll(TreeScope_Descendants, &cond)?;
+        let n = tabs.Length()?;
+        let mut names = Vec::new();
+        for i in 0..n {
+            names.push(
+                tabs.GetElement(i)?
+                    .CurrentName()
+                    .map(|b| b.to_string())
+                    .unwrap_or_default(),
+            );
+        }
+        let Some(i) = pick_tab(&names, title) else {
+            return Ok(false);
+        };
+        let tab = tabs.GetElement(i as i32)?;
+        if let Ok(p) =
+            tab.GetCurrentPatternAs::<IUIAutomationSelectionItemPattern>(UIA_SelectionItemPatternId)
+        {
+            return p.Select().map(|()| true);
+        }
+        if let Ok(p) = tab.GetCurrentPatternAs::<IUIAutomationInvokePattern>(UIA_InvokePatternId) {
+            return p.Invoke().map(|()| true);
+        }
+        let p = tab.GetCurrentPatternAs::<IUIAutomationLegacyIAccessiblePattern>(
+            UIA_LegacyIAccessiblePatternId,
+        )?;
+        p.DoDefaultAction().map(|()| true)
+    }
+}
+
 /// Brings the window of the app playing `title` to the front (restoring it
-/// if minimized). Returns false when the app has no suitable window.
+/// if minimized), first selecting the playing tab when the app is a browser.
+/// Returns false when the app has no suitable window. The UI Automation
+/// search and the focusing run on a short-lived thread (UIA is slow and needs
+/// COM), so a true result only means "working on it".
 pub fn focus_app_window(app_id: &str, title: &str) -> Result<bool> {
     let mut found: Vec<(HWND, String)> = Vec::new();
     // SAFETY: the callback only runs during the call and `found` outlives it.
@@ -444,20 +508,48 @@ pub fn focus_app_window(app_id: &str, title: &str) -> Result<bool> {
             )
         })
         .collect();
-    let Some(i) = pick_window(&candidates, title) else {
+    let Some(fallback) = pick_window(&candidates, title) else {
         return Ok(false);
     };
-    let hwnd = found[i].0;
-    // SAFETY: plain calls; stale handles just fail.
-    unsafe {
-        if IsIconic(hwnd).as_bool() {
-            let _ = ShowWindow(hwnd, SW_RESTORE);
+    // HWND isn't Send; the thread gets raw values.
+    let app_windows: Vec<isize> = found
+        .iter()
+        .zip(&candidates)
+        .filter(|(_, c)| c.0)
+        .map(|((h, _), _)| h.0 as isize)
+        .collect();
+    let fallback = found[fallback].0.0 as isize;
+    let title = title.to_owned();
+    std::thread::spawn(move || {
+        let target = select_playing_tab(&app_windows, &title).unwrap_or(fallback);
+        let hwnd = HWND(target as *mut _);
+        // SAFETY: plain calls; stale handles just fail.
+        unsafe {
+            if IsIconic(hwnd).as_bool() {
+                let _ = ShowWindow(hwnd, SW_RESTORE);
+            }
         }
-    }
-    // Nook never activates, so the foreground lock needs the same input
-    // attachment trick as the embedded phone window.
-    crate::embed::give_focus(crate::window::Hwnd::from_raw(hwnd.0 as isize));
+        // Nook never activates, so the foreground lock needs the same input
+        // attachment trick as the embedded phone window (it attaches the
+        // calling thread, so any thread works).
+        crate::embed::give_focus(crate::window::Hwnd::from_raw(target));
+    });
     Ok(true)
+}
+
+/// First app window (z-order) with a tab titled like `title`, after selecting
+/// that tab. None when there is no such tab or UI Automation is unavailable.
+fn select_playing_tab(windows: &[isize], title: &str) -> Option<isize> {
+    // SAFETY: COM is initialised for this short-lived thread only.
+    unsafe {
+        let _ = CoInitializeEx(None, COINIT_MULTITHREADED).ok();
+        let uia: IUIAutomation =
+            CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER).ok()?;
+        windows
+            .iter()
+            .copied()
+            .find(|&h| select_tab(&uia, HWND(h as *mut _), title).unwrap_or(false))
+    }
 }
 
 /// `EnumWindows` callback: visible, titled, non-tool, uncloaked windows.
