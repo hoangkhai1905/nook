@@ -17,6 +17,7 @@ use nook_ui::theme::{SIZE_LABEL, TILE_RADIUS, Theme, with_alpha};
 use nook_ui::{anim, icons, paint, widgets};
 use std::time::Duration;
 
+use crate::kit;
 use crate::snipper::Snipper;
 
 const HINT: &str =
@@ -26,6 +27,7 @@ const MAX_HISTORY: usize = 12;
 /// How long the "Copied" confirmation shows on the page.
 const COPIED_FOR: f64 = 1.2;
 /// History page grid.
+const SETTINGS: &str = "color_picker.txt";
 const COLS: usize = 4;
 const GAP: f32 = 8.0;
 const CARD_H: f32 = 76.0;
@@ -49,6 +51,25 @@ impl Format {
         Format::Oklch,
     ];
     const LABELS: [&str; 5] = ["HEX", "RGB", "HSL", "HSV", "OKLCH"];
+
+    /// Stable name stored in the settings file.
+    fn as_str(self) -> &'static str {
+        match self {
+            Format::Hex => "hex",
+            Format::Rgb => "rgb",
+            Format::Hsl => "hsl",
+            Format::Hsv => "hsv",
+            Format::Oklch => "oklch",
+        }
+    }
+
+    /// Unknown names fall back to the default.
+    fn from_name(s: &str) -> Format {
+        Format::ALL
+            .into_iter()
+            .find(|f| f.as_str() == s)
+            .unwrap_or_default()
+    }
 
     pub fn format(self, [r, g, b]: [u8; 3]) -> String {
         match self {
@@ -214,6 +235,11 @@ impl Module for ColorPicker {
 
     fn attach(&mut self, ctx: &egui::Context) {
         self.snipper.attach(ctx);
+        for (k, v) in kit::read_settings(SETTINGS) {
+            if k == "format" {
+                self.format = Format::from_name(&v);
+            }
+        }
     }
 
     fn is_active(&self) -> bool {
@@ -295,6 +321,7 @@ impl Module for ColorPicker {
             .changed()
         {
             self.format = Format::ALL[selected];
+            kit::write_settings(SETTINGS, &[("format", self.format.as_str().to_owned())]);
         }
 
         if self.history.is_empty() {
@@ -404,6 +431,14 @@ impl ColorPicker {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn format_names_round_trip() {
+        for f in Format::ALL {
+            assert_eq!(Format::from_name(f.as_str()), f);
+        }
+        assert_eq!(Format::from_name("bogus"), Format::default());
+    }
 
     #[test]
     fn formats_like_css() {
