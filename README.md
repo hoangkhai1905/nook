@@ -67,6 +67,15 @@ frame, the interval between frames and why egui repainted.
 Dev flags: `--pinned` starts expanded and pinned. `--settings` opens the
 settings page, `--page=<module id>` a module's page (e.g. `--page=phone_link`).
 
+### If the top of the screen is a black strip
+
+On some GPU drivers the default DirectX renderer comes up opaque. To get out:
+
+- Hold **Shift** while starting Nook: safe mode, OpenGL for that run only.
+- Or right-click the tray icon and choose **Restart with OpenGL** (it saves
+  the choice; the item then reads **Restart with DirectX**).
+- Or start `nook.exe --renderer=gl`.
+
 ### Installer
 
 `installer\build.ps1` builds `nook.exe` and packs it into

@@ -5,6 +5,7 @@ use crate::registry::{self, Hive};
 use crate::{Result, Win32Context};
 use windows::Win32::Graphics::Dwm::DwmGetColorizationColor;
 use windows::Win32::System::Diagnostics::Debug::MessageBeep;
+use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_SHIFT};
 use windows::Win32::UI::HiDpi::{GetDpiForSystem, GetSystemMetricsForDpi};
 use windows::Win32::UI::WindowsAndMessaging::{
     MB_ICONASTERISK, SM_CXSMICON, SPI_GETCLIENTAREAANIMATION, SPI_GETDESKWALLPAPER,
@@ -22,6 +23,12 @@ pub fn apps_use_light_theme() -> bool {
 /// "Transparency effects" toggle in Settings > Personalization > Colors.
 pub fn transparency_enabled() -> bool {
     registry::read_dword(Hive::CurrentUser, PERSONALIZE, "EnableTransparency").unwrap_or(1) != 0
+}
+
+/// Shift is held right now (read once at launch for safe mode).
+pub fn shift_held() -> bool {
+    // SAFETY: pure state query. The high bit means "currently down".
+    unsafe { GetAsyncKeyState(i32::from(VK_SHIFT.0)) as u16 & 0x8000 != 0 }
 }
 
 /// Pixel size of a small icon (the notification area's) at the system DPI.

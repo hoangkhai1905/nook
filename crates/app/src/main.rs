@@ -15,6 +15,7 @@ mod watcher;
 
 use anyhow::{Context, Result};
 use nook_ui::shell::ShellMetrics;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 fn main() -> Result<()> {
     // Checked before logging starts: a second launch must not truncate the
@@ -40,14 +41,26 @@ fn start(instance: nook_platform::single_instance::InstanceGuard) -> Result<()> 
     diag::log_environment(&cfg);
 
     let forced_gl = std::env::args().any(|a| a == GL_FLAG);
-    let renderer = if forced_gl || cfg.renderer == config::Renderer::OpenGl {
-        eframe::Renderer::Glow
-    } else {
-        eframe::Renderer::Wgpu
-    };
+    // Safe mode: a DirectX build that presents opaque covers the top of the
+    // screen, so Settings can't be reached to switch renderer.
+    let shift = nook_platform::system::shift_held();
+    if shift {
+        tracing::warn!("safe mode: Shift held at launch, using OpenGL");
+    }
+    let renderer = pick_renderer(cfg.renderer, forced_gl || shift);
     let auto = cfg.renderer == config::Renderer::Auto;
     tracing::info!("renderer: {renderer:?} (setting {:?})", cfg.renderer);
-    match run(cfg, instance, renderer) {
+    let result = run(cfg, instance, renderer);
+    // The guard went with the app, so the new process can take it. The saved
+    // config already holds the renderer the tray item chose.
+    if RESTART_REQUESTED.load(Ordering::Relaxed) && result.is_ok() {
+        let exe = std::env::current_exe().context("current exe")?;
+        std::process::Command::new(exe)
+            .spawn()
+            .context("restarting Nook")?;
+        return Ok(());
+    }
+    match result {
         // DirectX could not start: try again on OpenGL in a fresh process (an
         // event loop can only be made once). The single-instance guard was
         // dropped with the app, so the new process can take it.
@@ -61,6 +74,18 @@ fn start(instance: nook_platform::single_instance::InstanceGuard) -> Result<()> 
             Ok(())
         }
         other => other,
+    }
+}
+
+/// Set by the tray's "Restart with ..." item; `start` relaunches after `run`
+/// returns, once the single-instance guard is released.
+pub static RESTART_REQUESTED: AtomicBool = AtomicBool::new(false);
+
+fn pick_renderer(setting: config::Renderer, force_gl: bool) -> eframe::Renderer {
+    if force_gl || setting == config::Renderer::OpenGl {
+        eframe::Renderer::Glow
+    } else {
+        eframe::Renderer::Wgpu
     }
 }
 
@@ -131,5 +156,23 @@ fn wgpu_options() -> eframe::egui_wgpu::WgpuConfiguration {
         surface: SurfaceConfig::LOW_LATENCY,
         wgpu_setup: WgpuSetup::CreateNew(setup),
         ..Default::default()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use config::Renderer::*;
+
+    #[test]
+    fn renderer_choice() {
+        let glow = eframe::Renderer::Glow;
+        let wgpu = eframe::Renderer::Wgpu;
+        assert_eq!(pick_renderer(Auto, false), wgpu);
+        assert_eq!(pick_renderer(DirectX, false), wgpu);
+        assert_eq!(pick_renderer(OpenGl, false), glow);
+        // The flag or Shift overrides the saved setting.
+        assert_eq!(pick_renderer(Auto, true), glow);
+        assert_eq!(pick_renderer(DirectX, true), glow);
     }
 }
