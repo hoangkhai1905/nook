@@ -11,17 +11,21 @@
 //! The thread never touches the window itself: changing a window's style
 //! from another thread sends a synchronous message to the window's thread,
 //! which deadlocks as soon as that thread waits on anything the poller holds.
+//! It may *read* the style, though: if winit dropped (or re-added) the bit
+//! after the last frame, nothing would repaint to fix it, so the thread
+//! wakes the UI thread (rate-limited) and `apply_click_through` corrects it.
 //!
 //! [`window::set_click_through`]: crate::window::set_click_through
 //!
 //! A window region would do this with no thread, but changing the region of
 //! the OpenGL window flashes the newly included area (see `window`).
 
+use crate::window::{self, Hwnd};
 use crate::{PlatformError, Result};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use windows::Win32::Foundation::POINT;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetAsyncKeyState, VK_LBUTTON, VK_MBUTTON, VK_RBUTTON,
@@ -100,9 +104,10 @@ pub struct HitTester {
 
 impl HitTester {
     /// Starts polling. `on_change` runs on the polling thread whenever the
-    /// cursor enters or leaves the shape; read [`Self::inside`] on the UI
-    /// thread and apply it there.
-    pub fn spawn(on_change: impl Fn(bool) + Send + 'static) -> Result<Self> {
+    /// cursor enters or leaves the shape, or `hwnd`'s click-through bit
+    /// disagrees with it; read [`Self::inside`] on the UI thread and apply
+    /// it there.
+    pub fn spawn(hwnd: Hwnd, on_change: impl Fn(bool) + Send + 'static) -> Result<Self> {
         let shared = Arc::new(Shared {
             shape: Mutex::new(HitShape::default()),
             inside: AtomicBool::new(false),
@@ -111,7 +116,7 @@ impl HitTester {
         let s = shared.clone();
         let thread = std::thread::Builder::new()
             .name("nook-hittest".into())
-            .spawn(move || run(&s, on_change))
+            .spawn(move || run(&s, hwnd, on_change))
             .map_err(|e| PlatformError::Other(format!("spawning hit-test thread: {e}")))?;
         Ok(Self {
             shared,
@@ -133,8 +138,20 @@ impl HitTester {
     }
 }
 
-fn run(shared: &Shared, on_change: impl Fn(bool)) {
+/// Minimum gap between repaint requests for a click-through mismatch.
+const HEAL_EVERY: Duration = Duration::from_millis(100);
+
+/// Whether the poller should ask the UI thread to re-apply the click-through
+/// bit: it disagrees with `interactive` (set while the window should take
+/// input, or clear while it should let clicks through) and the last wake-up
+/// is old enough that a frame would already have fixed it.
+fn needs_heal(interactive: bool, has_transparent_bit: bool, since_last_wake: Duration) -> bool {
+    interactive == has_transparent_bit && since_last_wake >= HEAL_EVERY
+}
+
+fn run(shared: &Shared, hwnd: Hwnd, on_change: impl Fn(bool)) {
     let mut interactive = false;
+    let mut last_wake = Instant::now();
     while !shared.stop.load(Ordering::Relaxed) {
         let mut pt = POINT::default();
         // SAFETY: valid out pointer.
@@ -150,7 +167,15 @@ fn run(shared: &Shared, on_change: impl Fn(bool)) {
         if interactive != inside && !hold {
             interactive = inside;
             shared.inside.store(inside, Ordering::Relaxed);
+            last_wake = Instant::now();
             on_change(inside);
+        } else if needs_heal(
+            interactive,
+            window::has_click_through(hwnd),
+            last_wake.elapsed(),
+        ) {
+            last_wake = Instant::now();
+            on_change(interactive);
         }
         let wait = if near { 8 } else { 40 };
         std::thread::sleep(Duration::from_millis(wait));
@@ -177,6 +202,21 @@ mod tests {
         assert!(!polygon_contains(&sq, (15.0, 5.0)));
         assert!(!polygon_contains(&sq, (5.0, -1.0)));
         assert!(!polygon_contains(&sq[..2], (0.5, 0.0)));
+    }
+
+    #[test]
+    fn heal_only_on_mismatch_and_rate_limited() {
+        let old = HEAL_EVERY;
+        let new = Duration::from_millis(10);
+        // Outside the shape: bit missing is the bug, bit present is fine.
+        assert!(needs_heal(false, false, old));
+        assert!(!needs_heal(false, true, old));
+        // Inside the shape: the bit must be clear.
+        assert!(needs_heal(true, true, old));
+        assert!(!needs_heal(true, false, old));
+        // A persistent mismatch cannot wake the UI faster than HEAL_EVERY.
+        assert!(!needs_heal(false, false, new));
+        assert!(!needs_heal(true, true, Duration::ZERO));
     }
 
     #[test]
