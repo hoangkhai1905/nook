@@ -30,7 +30,7 @@ use nook_ui::theme::{self, FALLBACK_ACCENT, SIZE_BODY, SIZE_LABEL, Theme, ThemeM
 use raw_window_handle::{HasWindowHandle, RawWindowHandle};
 use std::str::FromStr;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Page {
@@ -38,6 +38,18 @@ enum Page {
     Settings,
     /// A module's full-panel page (e.g. clipboard history), by module id.
     Module(&'static str),
+}
+
+/// Minimum gap between blur clip/tint pushes while the shell animates.
+// ponytail: ~120 Hz ceiling, so on >120 Hz displays the blur edge can lag the
+// painted edge by up to one throttled frame. Raise the rate or drop the
+// throttle if that ever shows.
+const BACKDROP_MIN_INTERVAL: Duration = Duration::from_millis(8);
+
+/// How long to hold back a backdrop push, or `None` when one is due.
+fn backdrop_wait(now: Instant, last_push: Option<Instant>, min: Duration) -> Option<Duration> {
+    let left = min.checked_sub(now.saturating_duration_since(last_push?))?;
+    (!left.is_zero()).then_some(left)
 }
 
 /// Shell outline (window px) and debug-overlay rect last sent to the OS.
@@ -106,6 +118,8 @@ pub struct NookApp {
     pushed: Option<PushedShape>,
     /// Forces the next frame to push its shape to the OS.
     shape_dirty: bool,
+    /// When the backdrop last got a clip/tint push (see `BACKDROP_MIN_INTERVAL`).
+    backdrop_pushed_at: Option<Instant>,
     /// Whether the cursor was inside the shape at the previous frame.
     was_inside: bool,
     /// Z-layer last applied (`cfg.on_top`).
@@ -268,6 +282,7 @@ impl NookApp {
             hit,
             pushed: None,
             shape_dirty: true,
+            backdrop_pushed_at: None,
             was_inside: false,
             applied_on_top: None,
             frames: 0,
@@ -514,8 +529,27 @@ impl NookApp {
         tracing::info!("backdrop material: {:?}", self.material);
     }
 
+    /// Whether the backdrop (tint and clip) may be updated this frame; call
+    /// once per frame. Otherwise a repaint is scheduled for when it may, so
+    /// the final settled shape is always sent. A pending re-push
+    /// (`shape_dirty`) is never held back.
+    fn backdrop_due(&mut self, ctx: &egui::Context) -> bool {
+        let now = Instant::now();
+        if !self.shape_dirty
+            && let Some(wait) = backdrop_wait(now, self.backdrop_pushed_at, BACKDROP_MIN_INTERVAL)
+        {
+            ctx.request_repaint_after(wait + Duration::from_millis(1));
+            return false;
+        }
+        self.backdrop_pushed_at = Some(now);
+        true
+    }
+
     /// Pushes this frame's glass tint to the compositor.
-    fn update_tint(&mut self, ctx: &egui::Context, theme: &Theme, out: &ShellOutput) {
+    fn update_tint(&mut self, ctx: &egui::Context, theme: &Theme, out: &ShellOutput, due: bool) {
+        if !due {
+            return;
+        }
         let Some(b) = &mut self.backdrop else {
             return;
         };
@@ -545,21 +579,32 @@ impl NookApp {
     /// Pushes the shell's current shape to the compositor (sub-pixel clip
     /// of the glass) and to the hit tester (screen pixels, plus the debug
     /// overlay if enabled). Only does work when the shape changed.
-    fn update_shape(&mut self, ctx: &egui::Context, shape: Option<Squircle>, extra: Option<Rect>) {
+    fn update_shape(
+        &mut self,
+        ctx: &egui::Context,
+        shape: Option<Squircle>,
+        extra: Option<Rect>,
+        due: bool,
+    ) {
         let ppp = ctx.pixels_per_point();
         let outline: Vec<(f32, f32)> = shape
             .map(|s| s.outline().iter().map(|p| (p.x * ppp, p.y * ppp)).collect())
             .unwrap_or_default();
+        // Before the hit-test early return: a throttled frame must still be
+        // able to deliver the final shape once it has settled.
+        if due && let Some(b) = &mut self.backdrop {
+            if self.shape_dirty {
+                b.invalidate_shape();
+            }
+            if let Err(e) = b.set_shape(&outline) {
+                tracing::warn!("backdrop clip: {e}");
+            }
+        }
         let key = (outline, extra);
         if self.pushed.as_ref() == Some(&key) && !self.shape_dirty {
             return;
         }
         let (outline, extra) = key;
-        if let Some(b) = &mut self.backdrop
-            && let Err(e) = b.set_shape(&outline)
-        {
-            tracing::warn!("backdrop clip: {e}");
-        }
         if let Some(hit) = &self.hit {
             let (ox, oy) = self
                 .anchor
@@ -1263,8 +1308,9 @@ impl eframe::App for NookApp {
         #[cfg(not(feature = "debug-overlay"))]
         let overlay_rect: Option<Rect> = None;
 
-        self.update_tint(&ctx, &theme, &out);
-        self.update_shape(&ctx, out.visible.then_some(out.shape), overlay_rect);
+        let due = self.backdrop_due(&ctx);
+        self.update_tint(&ctx, &theme, &out, due);
+        self.update_shape(&ctx, out.visible.then_some(out.shape), overlay_rect, due);
 
         // Reveal the window once real frames have been presented.
         self.frames = self.frames.saturating_add(1);
@@ -1321,5 +1367,21 @@ impl eframe::App for NookApp {
             .store(true, std::sync::atomic::Ordering::Relaxed);
         self.save_config();
         tracing::info!("bye");
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn backdrop_wait_throttles() {
+        let t0 = Instant::now();
+        let min = Duration::from_millis(8);
+        assert_eq!(backdrop_wait(t0, None, min), None);
+        let ms = Duration::from_millis;
+        assert_eq!(backdrop_wait(t0 + ms(3), Some(t0), min), Some(ms(5)));
+        assert_eq!(backdrop_wait(t0 + ms(8), Some(t0), min), None);
+        assert_eq!(backdrop_wait(t0 + ms(20), Some(t0), min), None);
     }
 }
