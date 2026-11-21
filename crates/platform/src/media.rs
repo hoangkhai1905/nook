@@ -17,7 +17,7 @@ use windows::Media::Control::{
     GlobalSystemMediaTransportControlsSessionManager as Manager,
     GlobalSystemMediaTransportControlsSessionPlaybackStatus as Status,
 };
-use windows::Storage::Streams::DataReader;
+use windows::Storage::Streams::{DataReader, IRandomAccessStreamReference};
 use windows::Win32::Foundation::{CloseHandle, HWND, LPARAM};
 use windows::Win32::Graphics::Dwm::{DWMWA_CLOAKED, DwmGetWindowAttribute};
 use windows::Win32::Storage::EnhancedStorage::PKEY_AppUserModel_ID;
@@ -362,7 +362,11 @@ fn now_ticks() -> i64 {
 fn read_thumbnail(
     props: &windows::Media::Control::GlobalSystemMediaTransportControlsSessionMediaProperties,
 ) -> Result<Vec<u8>> {
-    let thumb = props.Thumbnail().api("Thumbnail")?;
+    read_stream(&props.Thumbnail().api("Thumbnail")?)
+}
+
+/// Reads all bytes behind a WinRT stream reference (album art, app logos).
+pub(crate) fn read_stream(thumb: &IRandomAccessStreamReference) -> Result<Vec<u8>> {
     let stream = thumb
         .OpenReadAsync()
         .api("OpenReadAsync")?
@@ -382,7 +386,7 @@ fn read_thumbnail(
     Ok(bytes)
 }
 
-fn decode_art(bytes: &[u8]) -> Result<Art> {
+pub(crate) fn decode_art(bytes: &[u8]) -> Result<Art> {
     let image = image::load_from_memory(bytes)
         .map_err(|e| PlatformError::Other(format!("decoding album art: {e}")))?
         .thumbnail(ART_SIZE, ART_SIZE)
@@ -421,36 +425,40 @@ fn app_matches(app_id: &str, explicit: Option<&str>, exe_stem: Option<&str>) -> 
 }
 
 /// Index of the window to focus among `(belongs to the app, title)`
-/// candidates in z-order: the first app window whose title contains the
-/// media title, else the first app window.
-fn pick_window(candidates: &[(bool, String)], media_title: &str) -> Option<usize> {
-    let mut apps = candidates.iter().enumerate().filter(|(_, c)| c.0);
-    let first = apps.next()?.0;
-    let needle = media_title.to_lowercase();
-    if needle.is_empty() {
-        return Some(first);
-    }
-    let by_title = candidates
-        .iter()
-        .position(|c| c.0 && c.1.to_lowercase().contains(&needle));
+/// candidates in z-order: the first app window whose title contains a hint
+/// (hints in priority order), else the first app window.
+fn pick_window(candidates: &[(bool, String)], hints: &[&str]) -> Option<usize> {
+    let first = candidates.iter().position(|c| c.0)?;
+    let by_title = hints.iter().find_map(|h| {
+        let needle = h.trim().to_lowercase();
+        if needle.is_empty() {
+            return None;
+        }
+        candidates
+            .iter()
+            .position(|c| c.0 && c.1.to_lowercase().contains(&needle))
+    });
     Some(by_title.unwrap_or(first))
 }
 
-/// Index of the first tab whose name contains the media title
-/// (case-insensitive, so "<title> - YouTube - Audio playing" still matches).
-fn pick_tab(names: &[String], title: &str) -> Option<usize> {
-    let needle = title.trim().to_lowercase();
-    if needle.is_empty() {
-        return None;
-    }
-    names
-        .iter()
-        .position(|n| n.to_lowercase().contains(&needle))
+/// Index of the first tab whose name contains a hint, trying hints in
+/// priority order (case-insensitive, so "<title> - YouTube - Audio playing"
+/// still matches).
+fn pick_tab(names: &[String], hints: &[&str]) -> Option<usize> {
+    hints.iter().find_map(|h| {
+        let needle = h.trim().to_lowercase();
+        if needle.is_empty() {
+            return None;
+        }
+        names
+            .iter()
+            .position(|n| n.to_lowercase().contains(&needle))
+    })
 }
 
-/// Selects the browser tab titled like `title` in `hwnd` through UI
-/// Automation. True if a tab was found and selected.
-fn select_tab(uia: &IUIAutomation, hwnd: HWND, title: &str) -> windows::core::Result<bool> {
+/// Selects the browser tab matching a hint in `hwnd` through UI Automation.
+/// True if a tab was found and selected.
+fn select_tab(uia: &IUIAutomation, hwnd: HWND, hints: &[&str]) -> windows::core::Result<bool> {
     // SAFETY: COM calls on interfaces owned by this thread.
     unsafe {
         let root = uia.ElementFromHandle(hwnd)?;
@@ -469,7 +477,7 @@ fn select_tab(uia: &IUIAutomation, hwnd: HWND, title: &str) -> windows::core::Re
                     .unwrap_or_default(),
             );
         }
-        let Some(i) = pick_tab(&names, title) else {
+        let Some(i) = pick_tab(&names, hints) else {
             return Ok(false);
         };
         let tab = tabs.GetElement(i as i32)?;
@@ -488,12 +496,14 @@ fn select_tab(uia: &IUIAutomation, hwnd: HWND, title: &str) -> windows::core::Re
     }
 }
 
-/// Brings the window of the app playing `title` to the front (restoring it
-/// if minimized), first selecting the playing tab when the app is a browser.
-/// Returns false when the app has no suitable window. The UI Automation
-/// search and the focusing run on a short-lived thread (UIA is slow and needs
-/// COM), so a true result only means "working on it".
-pub fn focus_app_window(app_id: &str, title: &str) -> Result<bool> {
+/// Brings a window of the app `app_id` to the front (restoring it if
+/// minimized), first selecting the tab matching one of `hints` (priority
+/// order) when the app is a browser; else the window whose title matches a
+/// hint, else its first window. Returns false when the app has no suitable
+/// window. The UI Automation search and the focusing run on a short-lived
+/// thread (UIA is slow and needs COM), so a true result only means "working
+/// on it".
+pub fn focus_app(app_id: &str, hints: &[&str]) -> Result<bool> {
     let mut found: Vec<(HWND, String)> = Vec::new();
     // SAFETY: the callback only runs during the call and `found` outlives it.
     unsafe { EnumWindows(Some(collect), LPARAM(&raw mut found as isize)) }.api("EnumWindows")?;
@@ -508,7 +518,7 @@ pub fn focus_app_window(app_id: &str, title: &str) -> Result<bool> {
             )
         })
         .collect();
-    let Some(fallback) = pick_window(&candidates, title) else {
+    let Some(fallback) = pick_window(&candidates, hints) else {
         return Ok(false);
     };
     // HWND isn't Send; the thread gets raw values.
@@ -519,9 +529,9 @@ pub fn focus_app_window(app_id: &str, title: &str) -> Result<bool> {
         .map(|((h, _), _)| h.0 as isize)
         .collect();
     let fallback = found[fallback].0.0 as isize;
-    let title = title.to_owned();
+    let hints: Vec<String> = hints.iter().map(|h| (*h).to_owned()).collect();
     std::thread::spawn(move || {
-        let target = select_playing_tab(&app_windows, &title).unwrap_or(fallback);
+        let target = select_hinted_tab(&app_windows, &hints).unwrap_or(fallback);
         let hwnd = HWND(target as *mut _);
         // SAFETY: plain calls; stale handles just fail.
         unsafe {
@@ -537,24 +547,25 @@ pub fn focus_app_window(app_id: &str, title: &str) -> Result<bool> {
     Ok(true)
 }
 
-/// First app window (z-order) with a tab titled like `title`, after selecting
+/// First app window (z-order) with a tab matching a hint, after selecting
 /// that tab. None when there is no such tab or UI Automation is unavailable.
-fn select_playing_tab(windows: &[isize], title: &str) -> Option<isize> {
+fn select_hinted_tab(windows: &[isize], hints: &[String]) -> Option<isize> {
     // SAFETY: COM is initialised for this short-lived thread only.
     unsafe {
         let _ = CoInitializeEx(None, COINIT_MULTITHREADED).ok();
         let uia: IUIAutomation =
             CoCreateInstance(&CUIAutomation, None, CLSCTX_INPROC_SERVER).ok()?;
+        let hints: Vec<&str> = hints.iter().map(String::as_str).collect();
         windows
             .iter()
             .copied()
-            .find(|&h| select_tab(&uia, HWND(h as *mut _), title).unwrap_or(false))
+            .find(|&h| select_tab(&uia, HWND(h as *mut _), &hints).unwrap_or(false))
     }
 }
 
 /// `EnumWindows` callback: visible, titled, non-tool, uncloaked windows.
 unsafe extern "system" fn collect(hwnd: HWND, lparam: LPARAM) -> BOOL {
-    // SAFETY: `lparam` is the `Vec` passed by `focus_app_window`.
+    // SAFETY: `lparam` is the `Vec` passed by `focus_app`.
     let out = unsafe { &mut *(lparam.0 as *mut Vec<(HWND, String)>) };
     // SAFETY: read-only window queries into local buffers.
     unsafe {
@@ -628,12 +639,23 @@ mod tests {
         ]
         .map(String::from)
         .to_vec();
-        assert_eq!(pick_tab(&tabs, "TẬP 5 END | Trên Mạng Là Chị"), Some(1));
-        assert_eq!(pick_tab(&tabs, "  NHẠT-FINE "), Some(2), "trimmed, any case");
-        assert_eq!(pick_tab(&tabs, ""), None);
-        assert_eq!(pick_tab(&tabs, "   "), None);
-        assert_eq!(pick_tab(&tabs, "not open anywhere"), None);
-        assert_eq!(pick_tab(&[], "x"), None);
+        assert_eq!(pick_tab(&tabs, &["TẬP 5 END | Trên Mạng Là Chị"]), Some(1));
+        assert_eq!(
+            pick_tab(&tabs, &["  NHẠT-FINE "]),
+            Some(2),
+            "trimmed, any case"
+        );
+        assert_eq!(pick_tab(&tabs, &[""]), None);
+        assert_eq!(pick_tab(&tabs, &["   "]), None);
+        assert_eq!(pick_tab(&tabs, &["not open anywhere"]), None);
+        assert_eq!(pick_tab(&[], &["x"]), None);
+        assert_eq!(pick_tab(&tabs, &[]), None);
+        // Hints are tried in order: the first one that matches a tab wins.
+        assert_eq!(
+            pick_tab(&tabs, &["nope", "youtube music", "facebook"]),
+            Some(2)
+        );
+        assert_eq!(pick_tab(&tabs, &["facebook", "youtube music"]), Some(0));
     }
 
     #[test]
@@ -663,11 +685,13 @@ mod tests {
             c(true, "Inbox"),
             c(true, "Song - YouTube"),
         ];
-        assert_eq!(pick_window(&wins, "song"), Some(2));
-        assert_eq!(pick_window(&wins, "nothing"), Some(1));
-        assert_eq!(pick_window(&wins, ""), Some(1));
-        assert_eq!(pick_window(&[c(false, "Song")], "Song"), None);
-        assert_eq!(pick_window(&[], "Song"), None);
+        assert_eq!(pick_window(&wins, &["song"]), Some(2));
+        assert_eq!(pick_window(&wins, &["nothing"]), Some(1));
+        assert_eq!(pick_window(&wins, &[""]), Some(1));
+        assert_eq!(pick_window(&wins, &[]), Some(1));
+        assert_eq!(pick_window(&wins, &["", "nothing", "inbox"]), Some(1));
+        assert_eq!(pick_window(&[c(false, "Song")], &["Song"]), None);
+        assert_eq!(pick_window(&[], &["Song"]), None);
     }
 
     #[test]

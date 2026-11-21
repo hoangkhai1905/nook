@@ -186,7 +186,7 @@ impl Module for Media {
             .interact(open_area, ui.id().with("media-open"), Sense::click())
             .on_hover_cursor(egui::CursorIcon::PointingHand);
         if open.clicked() {
-            match media::focus_app_window(&now.app_id, &now.title) {
+            match media::focus_app(&now.app_id, &[&now.title]) {
                 Ok(true) => self.close = true,
                 Ok(false) => tracing::debug!("media: no window for {}", now.app_id),
                 Err(e) => tracing::debug!("media: focusing {}: {e}", now.app_id),
