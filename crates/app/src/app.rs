@@ -3,6 +3,7 @@
 //! with what the shell draws.
 
 use crate::config::{AccentSource, Config, Material, MonitorMode};
+use crate::reveal::Reveal;
 use crate::settings::{self, SETTINGS_ID, SettingsTile};
 use crate::stats::{self, Stats};
 use crate::tray::{Tray, TrayCommand};
@@ -118,6 +119,8 @@ pub struct NookApp {
     hit: Option<HitTester>,
     /// Last shape pushed to the compositor and the hit tester (window px).
     pushed: Option<PushedShape>,
+    /// Hover-to-reveal while hidden for a fullscreen app.
+    reveal: Reveal,
     /// Forces the next frame to push its shape to the OS.
     shape_dirty: bool,
     /// When the backdrop last got a clip/tint push (see `BACKDROP_MIN_INTERVAL`).
@@ -290,6 +293,7 @@ impl NookApp {
             backdrop_failed: false,
             hit,
             pushed: None,
+            reveal: Reveal::default(),
             shape_dirty: true,
             backdrop_pushed_at: None,
             was_inside: false,
@@ -652,6 +656,28 @@ impl NookApp {
         }
         self.pushed = Some((outline, extra));
         self.shape_dirty = false;
+    }
+
+    /// Tells the hit tester where the resting pill is (screen pixels) while
+    /// a hidden notch may reveal on hover, and nowhere otherwise.
+    fn update_hot_zone(&self, ctx: &egui::Context, armed: bool) {
+        let Some(hit) = &self.hit else { return };
+        let mut polygons = Vec::new();
+        if armed {
+            let (ox, oy) = self
+                .anchor
+                .map(|(x, y, _, _)| (x as f32, y as f32))
+                .unwrap_or_default();
+            let ppp = ctx.pixels_per_point();
+            let outline = self.shell.rest_shape(ctx.content_rect()).outline();
+            polygons.push(
+                outline
+                    .iter()
+                    .map(|p| (ox + p.x * ppp, oy + p.y * ppp))
+                    .collect(),
+            );
+        }
+        hit.set_hot_zone(HitShape { polygons });
     }
 
     /// Re-asserts the overlay styles (winit resets them on some state
@@ -1163,7 +1189,20 @@ impl eframe::App for NookApp {
             self.material.translucent(),
             &self.cfg.look(),
         );
-        let hidden = self.cfg.hide_in_fullscreen && self.sys.fullscreen;
+        let fullscreen_hidden = self.cfg.hide_in_fullscreen && self.sys.fullscreen;
+        self.update_hot_zone(&ctx, fullscreen_hidden && self.cfg.reveal_on_hover);
+        let now = ctx.input(|i| i.time);
+        let revealed = self.reveal.update(
+            now,
+            fullscreen_hidden,
+            self.cfg.reveal_on_hover,
+            self.hit.as_ref().is_some_and(HitTester::in_hot_zone),
+            self.shell.state.is_open(),
+        );
+        if let Some(at) = self.reveal.wake_at() {
+            ctx.request_repaint_after_secs((at - now).max(0.0) as f32 + 0.001);
+        }
+        let hidden = fullscreen_hidden && !revealed;
 
         let mut clicked = None;
         let mut page_request = None;

@@ -7,6 +7,7 @@ mod config;
 mod diag;
 #[cfg(feature = "debug-overlay")]
 mod overlay;
+mod reveal;
 mod settings;
 mod stats;
 mod tray;

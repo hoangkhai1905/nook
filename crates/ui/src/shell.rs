@@ -185,6 +185,12 @@ impl Shell {
         lerp(lo, hi, frac)
     }
 
+    /// The pill at rest in its slot (no hover swell): the hot zone for
+    /// revealing a hidden notch.
+    pub fn rest_shape(&self, window: Rect) -> Squircle {
+        self.shape_for(window, self.metrics.collapsed, 0.0, self.placement.frac())
+    }
+
     fn shape_for(&self, window: Rect, size: Vec2, progress: f32, frac: f32) -> Squircle {
         let m = &self.metrics;
         let min = pos2(
