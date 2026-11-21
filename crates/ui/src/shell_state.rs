@@ -42,6 +42,9 @@ pub struct ShellState {
     hover_since: Option<f64>,
     left_since: Option<f64>,
     closed_at: Option<f64>,
+    /// Set by an explicit close: hover can't reopen until the pointer has
+    /// left the shell once (it is usually still over the shrinking panel).
+    hover_needs_leave: bool,
 }
 
 impl ShellState {
@@ -80,6 +83,7 @@ impl ShellState {
         } else {
             self.pinned = false;
             self.close_now(now);
+            self.hover_needs_leave = true;
         }
     }
 
@@ -114,6 +118,10 @@ impl ShellState {
     /// the pointer. See the `*_loops` / `rule_following_*` tests below.
     pub fn update(&mut self, now: f64, hovered: bool, t: &ShellTimings) -> ShellTargets {
         let mut wake_at = None;
+        if !hovered || self.open {
+            self.hover_needs_leave = false;
+        }
+        let hovered = hovered && !self.hover_needs_leave;
         if hovered {
             self.left_since = None;
             if !self.open {
@@ -229,6 +237,25 @@ mod tests {
         assert!(!s.is_pinned());
         let out = s.update(1.2, false, &T);
         assert!(!out.shell_open);
+    }
+
+    #[test]
+    fn explicit_close_under_the_pointer_waits_for_a_leave() {
+        let mut s = ShellState::default();
+        s.set_open(true, 0.0);
+        // Closed (e.g. after focusing a window) with the pointer still on it.
+        s.set_open(false, 1.0);
+        for i in 0..30 {
+            let out = s.update(1.0 + f64::from(i) / 60.0, true, &T);
+            assert!(!s.is_open(), "reopened at frame {i}");
+            assert!(!s.is_hovering_closed());
+            let _ = out;
+        }
+        // Pointer leaves, then comes back: hover works again.
+        s.update(1.6, false, &T);
+        s.update(1.7, true, &T);
+        s.update(1.7 + T.hover_delay + 0.001, true, &T);
+        assert!(s.is_open());
     }
 
     #[test]
