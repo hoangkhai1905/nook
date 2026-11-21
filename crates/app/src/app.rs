@@ -98,6 +98,8 @@ pub struct NookApp {
     editing: bool,
     pinned_before_edit: bool,
     tray: Option<Tray>,
+    /// This run draws with OpenGL (else DirectX).
+    on_gl: bool,
     tray_rx: Receiver<TrayCommand>,
     hotkeys: Option<Hotkeys>,
     sys: SystemState,
@@ -175,8 +177,15 @@ impl NookApp {
             }
         };
 
+        let on_gl = cc.wgpu_render_state.is_none();
         let (tray_tx, tray_rx) = unbounded();
-        let tray = match Tray::new(tray_tx, ctx.clone(), startup::is_enabled(), cfg.on_top) {
+        let tray = match Tray::new(
+            tray_tx,
+            ctx.clone(),
+            startup::is_enabled(),
+            cfg.on_top,
+            on_gl,
+        ) {
             Ok(t) => Some(t),
             Err(e) => {
                 tracing::error!("tray icon unavailable: {e:#}");
@@ -292,6 +301,7 @@ impl NookApp {
             activatable: false,
             updater,
             stats,
+            on_gl,
             _instance: instance,
             #[cfg(feature = "debug-overlay")]
             overlay: Default::default(),
@@ -424,6 +434,16 @@ impl NookApp {
                 self.apply_startup();
             }
             TrayCommand::Update => self.updater.install(),
+            TrayCommand::RestartRenderer => {
+                self.cfg.renderer = if self.on_gl {
+                    crate::config::Renderer::Auto
+                } else {
+                    crate::config::Renderer::OpenGl
+                };
+                self.save_config();
+                crate::RESTART_REQUESTED.store(true, std::sync::atomic::Ordering::Relaxed);
+                ctx.send_viewport_cmd(egui::ViewportCommand::Close);
+            }
             TrayCommand::Quit => ctx.send_viewport_cmd(egui::ViewportCommand::Close),
         }
     }

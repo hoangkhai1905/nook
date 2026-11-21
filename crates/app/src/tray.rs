@@ -14,6 +14,8 @@ pub enum TrayCommand {
     ToggleStartup,
     /// Download and install the release offered in the menu.
     Update,
+    /// Save the other renderer and relaunch (escape from a bad GPU driver).
+    RestartRenderer,
     Quit,
 }
 
@@ -37,12 +39,19 @@ impl Tray {
         ctx: egui::Context,
         startup_on: bool,
         on_top_on: bool,
+        on_gl: bool,
     ) -> Result<Self> {
         let settings = MenuItem::with_id("settings", "Settings", true, None);
         let pin = CheckMenuItem::with_id("pin", "Pin open", true, false, None);
         let on_top = CheckMenuItem::with_id("ontop", "Always on top", true, on_top_on, None);
         let startup =
             CheckMenuItem::with_id("startup", "Launch at startup", true, startup_on, None);
+        let renderer = MenuItem::with_id(
+            "renderer",
+            if on_gl { "Restart with DirectX" } else { "Restart with OpenGL" },
+            true,
+            None,
+        );
         let quit = MenuItem::with_id("quit", "Quit Nook", true, None);
         let menu = Menu::new();
         menu.append_items(&[
@@ -51,6 +60,7 @@ impl Tray {
             &on_top,
             &startup,
             &PredefinedMenuItem::separator(),
+            &renderer,
             &quit,
         ])
         .context("building tray menu")?;
@@ -62,6 +72,7 @@ impl Tray {
                 "ontop" => TrayCommand::ToggleOnTop,
                 "startup" => TrayCommand::ToggleStartup,
                 "update" => TrayCommand::Update,
+                "renderer" => TrayCommand::RestartRenderer,
                 "quit" => TrayCommand::Quit,
                 _ => return,
             };
