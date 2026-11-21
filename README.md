@@ -1,20 +1,13 @@
 # Nook
 
-> ### This is Nook's last open-source update
+> ### A fork of Nook 0.2.1
 >
-> We're sorry to announce that **Nook 0.3.0 is the final update of this
-> open-source project.** People loved Nook, and we're expanding our team
-> because we see something big in it. That means releases after this one will
-> not continue on this repository.
->
-> From here on, the code in this repo is yours: fork it, change it, ship it,
-> do whatever you want with it (it stays MIT-licensed). On our side we'll keep
-> improving Nook with frequent updates. Thank you to everyone who used it,
-> filed a bug or wrote a plugin.
->
-> The repository holds the source up to Nook 0.2.1. The 0.3.0 installer on the
-> [Releases](https://github.com/Geguchh024/nook/releases/latest) page is the
-> last build we publish here.
+> Upstream ([Geguchh024/nook](https://github.com/Geguchh024/nook)) stopped
+> publishing source after 0.2.1 and now ships closed builds (later renamed
+> Fenn). This fork continues from that last MIT-licensed source. It updates
+> from this repository's releases, sends no usage stats, and installs with
+> its own Setup id, so it sits beside an upstream Nook or Fenn install
+> instead of replacing it.
 
 A floating notch for Windows 10/11. A small glass pill sits at the top
 of the screen (center, or either corner). Hover it and it springs open into a bento grid of
@@ -23,17 +16,14 @@ utilities. Move away and it folds back. It idles at 0% CPU.
 Built in Rust with eframe/egui (OpenGL), the `windows` crate (Win32, DWM,
 Windows.UI.Composition, Windows.Media.Ocr), `tray-icon` and `global-hotkey`.
 Your clipboard, screenshots, notes and files stay on your machine. Nook
-goes online for only these: checking GitHub for updates, a once-a-day
-anonymous usage count (a random install id, the Nook version, the Windows
-build, panel opens and minutes, and uses of each built-in tool; on by
-default, off in Settings > Advanced, see [Usage stats](#usage-stats)), Lens search when you use it (your browser
+goes online for only these: checking GitHub for updates, Lens search when you use it (your browser
 sends the area you selected to Google Lens), and installing a plugin from
 the website (Nook downloads it from GitHub).
 
 ## Download
 
 Get `Nook-Setup-<version>.exe` from
-[GitHub Releases](https://github.com/Geguchh024/nook/releases/latest) and run
+[GitHub Releases](https://github.com/hoangkhai1905/nook/releases/latest) and run
 it. Windows 10 or 11, 64-bit; no admin rights needed. The installer isn't
 code-signed yet, so SmartScreen may say "Windows protected your PC": click
 **More info**, then **Run anyway**.
@@ -124,9 +114,14 @@ themselves, and their Update button opens the release page instead.
 
 ### Usage stats
 
-Nook counts installs and usage anonymously, so we know how many people
-use it and which tools matter. On first run it makes a random install id.
-Once a day while it's open, it sends a Cloudflare Worker (`telemetry/`):
+**Off in this fork:** `PING_URL` in `crates/app/src/stats.rs` is `None`,
+so nothing is sent and the Settings toggle has no effect. The rest of this
+section describes how it works once you deploy your own Worker and set
+that URL.
+
+Nook can count installs and usage anonymously. On first run it makes a
+random install id. Once a day while it's open, it sends a Cloudflare
+Worker (`telemetry/`):
 
 - that id, the Nook version and the Windows build number,
 - how many times the panel opened and how many minutes it was open since

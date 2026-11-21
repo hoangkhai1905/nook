@@ -14,7 +14,9 @@
 
 [Setup]
 ; Never change AppId: it is how Setup finds an earlier install to upgrade.
-AppId={{7A7D5AD9-433D-4FE2-8D7F-DCAEB12FEA15}
+; This fork's own id; upstream (Nook/Fenn) uses {7A7D5AD9-433D-4FE2-8D7F-DCAEB12FEA15},
+; so the two install side by side instead of one replacing the other.
+AppId={{8847CE78-7839-4E35-A49C-48D94AB24C1C}
 AppName={#AppName}
 AppVersion={#AppVersion}
 AppVerName={#AppName} {#AppVersion}
