@@ -21,6 +21,13 @@ pub enum Badge {
     Glyph { icon: &'static str },
     /// A pulsing dot: something arrived.
     Pulse,
+    /// Media is playing: the pill widens to show the title (and the album
+    /// art, if any) and animated bars.
+    Media {
+        title: String,
+        /// Owned by the module, which outlives the frame that reads this.
+        art: Option<egui::TextureId>,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
