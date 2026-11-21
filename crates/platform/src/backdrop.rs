@@ -156,6 +156,16 @@ pub struct Tint {
     pub highlight_y: f32,
 }
 
+/// Largest per-point move (window px) not worth a new clip.
+const SHAPE_EPS: f32 = 0.25;
+
+fn shape_changed(a: &[(f32, f32)], b: &[(f32, f32)], eps: f32) -> bool {
+    a.len() != b.len()
+        || a.iter()
+            .zip(b)
+            .any(|(p, q)| (p.0 - q.0).abs() > eps || (p.1 - q.1).abs() > eps)
+}
+
 fn color([r, g, b, a]: [u8; 4]) -> Color {
     Color {
         A: a,
@@ -180,6 +190,8 @@ pub struct Backdrop {
     highlight_brush: CompositionLinearGradientBrush,
     highlight_stops: [CompositionColorGradientStop; 3],
     last_tint: Option<Tint>,
+    /// Polygon last sent to the compositor; unchanged shapes are not re-pushed.
+    last_shape: Vec<(f32, f32)>,
     factory: ID2D1Factory,
     host: Hwnd,
     placed: Option<(i32, i32, i32, i32)>,
@@ -349,6 +361,7 @@ impl Backdrop {
             highlight_brush,
             highlight_stops,
             last_tint: None,
+            last_shape: Vec::new(),
             factory,
             host,
             placed: None,
@@ -384,15 +397,32 @@ impl Backdrop {
             }
             .api("SetWindowPos(backdrop)")?;
             self.placed = Some(rect);
+            self.invalidate_shape();
         }
         Ok(())
     }
 
+    /// Forgets the last pushed shape so the next `set_shape` always applies
+    /// (host moved or resized, material changed).
+    pub fn invalidate_shape(&mut self) {
+        self.last_shape.clear();
+    }
+
+    /// Whether `polygon` differs from what the compositor already shows.
+    pub fn shape_differs(&self, polygon: &[(f32, f32)]) -> bool {
+        shape_changed(&self.last_shape, polygon, SHAPE_EPS)
+    }
+
     /// Clips everything to `polygon` (window pixels, sub-pixel precise).
-    /// Fewer than three points hides it.
+    /// Fewer than three points hides it. Cheap when the shape is unchanged:
+    /// every clip change makes DWM recompute the blur.
     pub fn set_shape(&mut self, polygon: &[(f32, f32)]) -> Result<()> {
         if polygon.len() < 3 {
+            self.last_shape.clear();
             return self.set_visible(false);
+        }
+        if !self.shape_differs(polygon) {
+            return self.set_visible(true);
         }
         let points: Vec<Vector2> = polygon
             .iter()
@@ -424,6 +454,7 @@ impl Backdrop {
             .api("CreateGeometricClipWithGeometry")?;
         self.root.SetClip(&clip).api("SetClip")?;
         self.rim.SetGeometry(&geom).api("SetGeometry(rim)")?;
+        self.last_shape = polygon.to_vec();
         self.set_visible(true)
     }
 
@@ -498,5 +529,20 @@ impl Drop for Backdrop {
     fn drop(&mut self) {
         // SAFETY: destroying the window we created.
         let _ = unsafe { DestroyWindow(self.host.get()) };
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shape_change_uses_epsilon_and_length() {
+        let a = [(0.0, 0.0), (10.0, 0.0), (10.0, 10.0)];
+        assert!(!shape_changed(&a, &a, 0.25));
+        assert!(!shape_changed(&a, &[(0.1, 0.0), (10.0, -0.2), (10.0, 10.0)], 0.25));
+        assert!(shape_changed(&a, &[(0.0, 0.0), (10.5, 0.0), (10.0, 10.0)], 0.25));
+        assert!(shape_changed(&a, &a[..2], 0.25));
+        assert!(shape_changed(&[], &a, 0.25));
     }
 }
