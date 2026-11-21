@@ -1226,6 +1226,8 @@ impl eframe::App for NookApp {
         let typing = ctx.text_edit_focused() || nook_modules::plugins::keyboard_focused(&ctx);
         self.shell.hold_open =
             (typing && ctx.input(|i| i.focused)) || ctx.input(|i| !i.raw.hovered_files.is_empty());
+        // Revealed over a fullscreen app: hover shows the pill, a click opens.
+        self.shell.click_to_open = fullscreen_hidden && revealed;
         self.route_dropped_files(&ctx);
         self.shell.expanded_override = self.page_size(&ctx);
         let registry = &mut self.registry;

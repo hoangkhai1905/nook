@@ -134,6 +134,9 @@ pub struct Shell {
     /// Treat the shell as hovered whatever the pointer does (typing in it,
     /// files being dragged over it).
     pub hold_open: bool,
+    /// Hovering the closed pill doesn't open it; a click does (pill revealed
+    /// over a fullscreen app, so a glance at the time stays a glance).
+    pub click_to_open: bool,
     /// Expanded size wanted by the page on show (phone link), instead of
     /// `metrics.expanded`.
     pub expanded_override: Option<Vec2>,
@@ -154,6 +157,7 @@ impl Shell {
             state: ShellState::default(),
             placement: Placement::default(),
             hold_open: false,
+            click_to_open: false,
             expanded_override: None,
             tall: metrics.expanded.y,
             id: Id::new("nook-shell"),
@@ -238,11 +242,19 @@ impl Shell {
         {
             let resp = ui.interact(shape.rect, self.id.with("bg"), Sense::click());
             if resp.clicked() {
-                self.state.toggle_pin(now);
+                if self.click_to_open && !self.state.is_open() {
+                    // Open without pinning: leaving still closes it.
+                    self.state.set_open(true, now);
+                } else {
+                    self.state.toggle_pin(now);
+                }
             }
         }
 
-        let targets = self.state.update(now, hovered, &self.timings);
+        let hover_opens = hover_counts(self.click_to_open, self.state.is_open());
+        let targets = self
+            .state
+            .update(now, hovered && hover_opens, &self.timings);
         if let Some(at) = targets.wake_at {
             ctx.request_repaint_after_secs(((at - now).max(0.0)) as f32 + 0.001);
         }
@@ -383,8 +395,22 @@ impl Shell {
     }
 }
 
+/// Whether hovering may open (or keep open) the shell: with `click_to_open`
+/// only once it is already open, so hover keeps an opened panel up.
+fn hover_counts(click_to_open: bool, is_open: bool) -> bool {
+    !click_to_open || is_open
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn click_to_open_ignores_hover_until_open() {
+        assert!(super::hover_counts(false, false));
+        assert!(super::hover_counts(false, true));
+        assert!(!super::hover_counts(true, false));
+        assert!(super::hover_counts(true, true));
+    }
+
     use super::*;
 
     #[test]
