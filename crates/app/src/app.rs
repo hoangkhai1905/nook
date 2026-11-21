@@ -40,7 +40,6 @@ enum Page {
     Module(&'static str),
 }
 
-/// Shell outline (window px) and debug-overlay rect last sent to the OS.
 /// Minimum gap between blur clip/tint pushes while the shell animates.
 // ponytail: ~120 Hz ceiling, so on >120 Hz displays the blur edge can lag the
 // painted edge by up to one throttled frame. Raise the rate or drop the
@@ -53,6 +52,7 @@ fn backdrop_wait(now: Instant, last_push: Option<Instant>, min: Duration) -> Opt
     (!left.is_zero()).then_some(left)
 }
 
+/// Shell outline (window px) and debug-overlay rect last sent to the OS.
 type PushedShape = (Vec<(f32, f32)>, Option<Rect>);
 
 struct Hotkeys {
@@ -529,26 +529,25 @@ impl NookApp {
         tracing::info!("backdrop material: {:?}", self.material);
     }
 
-    /// Whether the backdrop may be updated this frame. Otherwise a repaint is
-    /// scheduled for when it may, so the final settled shape is always sent.
-    /// A pending re-push (`shape_dirty`) is never held back.
+    /// Whether the backdrop (tint and clip) may be updated this frame; call
+    /// once per frame. Otherwise a repaint is scheduled for when it may, so
+    /// the final settled shape is always sent. A pending re-push
+    /// (`shape_dirty`) is never held back.
     fn backdrop_due(&mut self, ctx: &egui::Context) -> bool {
-        if self.shape_dirty {
-            return true;
-        }
         let now = Instant::now();
-        match backdrop_wait(now, self.backdrop_pushed_at, BACKDROP_MIN_INTERVAL) {
-            Some(wait) => {
-                ctx.request_repaint_after(wait + Duration::from_millis(1));
-                false
-            }
-            None => true,
+        if !self.shape_dirty
+            && let Some(wait) = backdrop_wait(now, self.backdrop_pushed_at, BACKDROP_MIN_INTERVAL)
+        {
+            ctx.request_repaint_after(wait + Duration::from_millis(1));
+            return false;
         }
+        self.backdrop_pushed_at = Some(now);
+        true
     }
 
     /// Pushes this frame's glass tint to the compositor.
-    fn update_tint(&mut self, ctx: &egui::Context, theme: &Theme, out: &ShellOutput) {
-        if !self.backdrop_due(ctx) {
+    fn update_tint(&mut self, ctx: &egui::Context, theme: &Theme, out: &ShellOutput, due: bool) {
+        if !due {
             return;
         }
         let Some(b) = &mut self.backdrop else {
@@ -580,23 +579,26 @@ impl NookApp {
     /// Pushes the shell's current shape to the compositor (sub-pixel clip
     /// of the glass) and to the hit tester (screen pixels, plus the debug
     /// overlay if enabled). Only does work when the shape changed.
-    fn update_shape(&mut self, ctx: &egui::Context, shape: Option<Squircle>, extra: Option<Rect>) {
+    fn update_shape(
+        &mut self,
+        ctx: &egui::Context,
+        shape: Option<Squircle>,
+        extra: Option<Rect>,
+        due: bool,
+    ) {
         let ppp = ctx.pixels_per_point();
         let outline: Vec<(f32, f32)> = shape
             .map(|s| s.outline().iter().map(|p| (p.x * ppp, p.y * ppp)).collect())
             .unwrap_or_default();
         // Before the hit-test early return: a throttled frame must still be
         // able to deliver the final shape once it has settled.
-        if self.backdrop_due(ctx) {
-            if let Some(b) = &mut self.backdrop {
-                if self.shape_dirty {
-                    b.invalidate_shape();
-                }
-                if let Err(e) = b.set_shape(&outline) {
-                    tracing::warn!("backdrop clip: {e}");
-                }
+        if due && let Some(b) = &mut self.backdrop {
+            if self.shape_dirty {
+                b.invalidate_shape();
             }
-            self.backdrop_pushed_at = Some(Instant::now());
+            if let Err(e) = b.set_shape(&outline) {
+                tracing::warn!("backdrop clip: {e}");
+            }
         }
         let key = (outline, extra);
         if self.pushed.as_ref() == Some(&key) && !self.shape_dirty {
@@ -1306,8 +1308,9 @@ impl eframe::App for NookApp {
         #[cfg(not(feature = "debug-overlay"))]
         let overlay_rect: Option<Rect> = None;
 
-        self.update_tint(&ctx, &theme, &out);
-        self.update_shape(&ctx, out.visible.then_some(out.shape), overlay_rect);
+        let due = self.backdrop_due(&ctx);
+        self.update_tint(&ctx, &theme, &out, due);
+        self.update_shape(&ctx, out.visible.then_some(out.shape), overlay_rect, due);
 
         // Reveal the window once real frames have been presented.
         self.frames = self.frames.saturating_add(1);
