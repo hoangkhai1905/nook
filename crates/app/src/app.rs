@@ -169,7 +169,7 @@ impl NookApp {
         window::set_opacity(hwnd, 0).context("initial window opacity")?;
 
         let repaint = ctx.clone();
-        let hit = match HitTester::spawn(move |_| repaint.request_repaint()) {
+        let hit = match HitTester::spawn(hwnd, move |_| repaint.request_repaint()) {
             Ok(h) => Some(h),
             Err(e) => {
                 tracing::error!("hit testing unavailable, the notch will not take clicks: {e}");
@@ -1321,6 +1321,9 @@ impl eframe::App for NookApp {
         }
 
         self.sync_window_styles(&ctx);
+        // Activating the window for a text field can make winit rewrite the
+        // extended style; fix the click-through bit before the frame ends.
+        self.apply_click_through();
         self.trim_when_idle(&ctx, out.progress);
 
         #[cfg(feature = "debug-overlay")]

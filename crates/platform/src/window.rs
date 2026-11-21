@@ -330,6 +330,14 @@ pub fn ensure_shown(hwnd: Hwnd) {
     }
 }
 
+/// Whether the window currently lets mouse input fall through. A plain read,
+/// safe from any thread.
+pub fn has_click_through(hwnd: Hwnd) -> bool {
+    // SAFETY: style query.
+    let ex = unsafe { GetWindowLongPtrW(hwnd.get(), GWL_EXSTYLE) };
+    ex & WS_EX_TRANSPARENT.0 as isize != 0
+}
+
 /// Lets mouse input fall through the (layered) window to whatever is below.
 pub fn set_click_through(hwnd: Hwnd, through: bool) -> Result<()> {
     let changed = update_ex_style(hwnd, |ex| {
