@@ -20,6 +20,7 @@ pub mod ipc;
 pub mod material;
 pub mod media;
 pub mod monitor;
+pub mod notifications;
 pub mod ocr;
 pub mod perf;
 pub mod power;

@@ -119,6 +119,11 @@ pub struct ShellOutput {
     pub shape: Squircle,
     /// 0 = pill, 1 = panel (may overshoot slightly).
     pub progress: f32,
+    /// The closed pill was clicked while `capture_pill_click` was set (it
+    /// then neither pins nor opens).
+    pub pill_clicked: bool,
+    /// The pointer rests on the shell (or `hold_open` forces it).
+    pub pointer_over: bool,
     /// False when fully hidden (fullscreen app in front).
     pub visible: bool,
     /// Whole-shell opacity (fullscreen fade).
@@ -137,6 +142,10 @@ pub struct Shell {
     /// Hovering the closed pill doesn't open it; a click does (pill revealed
     /// over a fullscreen app, so a glance at the time stays a glance).
     pub click_to_open: bool,
+    /// The closed pill is showing something the app acts on (a notification):
+    /// hover doesn't open it and a click is reported in
+    /// `ShellOutput::pill_clicked` instead of pinning.
+    pub capture_pill_click: bool,
     /// Expanded size wanted by the page on show (phone link), instead of
     /// `metrics.expanded`.
     pub expanded_override: Option<Vec2>,
@@ -161,6 +170,7 @@ impl Shell {
             placement: Placement::default(),
             hold_open: false,
             click_to_open: false,
+            capture_pill_click: false,
             expanded_override: None,
             collapsed_width: None,
             tall: metrics.expanded.y,
@@ -249,12 +259,15 @@ impl Shell {
                 });
 
         // Click on the glass (not on a tile) pins / unpins.
+        let mut pill_clicked = false;
         if let Some(shape) = self.last_shape
             && !hidden
         {
             let resp = ui.interact(shape.rect, self.id.with("bg"), Sense::click());
             if resp.clicked() {
-                if self.click_to_open && !self.state.is_open() {
+                if self.capture_pill_click && !self.state.is_open() {
+                    pill_clicked = true;
+                } else if self.click_to_open && !self.state.is_open() {
                     // Open without pinning: leaving still closes it.
                     self.state.set_open(true, now);
                 } else {
@@ -263,7 +276,10 @@ impl Shell {
             }
         }
 
-        let hover_opens = hover_counts(self.click_to_open, self.state.is_open());
+        let hover_opens = hover_counts(
+            self.click_to_open || self.capture_pill_click,
+            self.state.is_open(),
+        );
         let targets = self
             .state
             .update(now, hovered && hover_opens, &self.timings);
@@ -329,6 +345,8 @@ impl Shell {
             return ShellOutput {
                 shape,
                 progress,
+                pill_clicked,
+                pointer_over: hovered,
                 visible,
                 opacity,
             };
@@ -401,14 +419,17 @@ impl Shell {
         ShellOutput {
             shape,
             progress,
+            pill_clicked,
+            pointer_over: hovered,
             visible,
             opacity,
         }
     }
 }
 
-/// Whether hovering may open (or keep open) the shell: with `click_to_open`
-/// only once it is already open, so hover keeps an opened panel up.
+/// Whether hovering may open (or keep open) the shell: when only a click
+/// opens it (`click_to_open`, or a notification owns the pill) only once it
+/// is already open, so hover keeps an opened panel up.
 fn hover_counts(click_to_open: bool, is_open: bool) -> bool {
     !click_to_open || is_open
 }

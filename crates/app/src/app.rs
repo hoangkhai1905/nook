@@ -3,6 +3,7 @@
 //! with what the shell draws.
 
 use crate::config::{AccentSource, Config, Material, MonitorMode};
+use crate::notify::{self, Notices};
 use crate::reveal::Reveal;
 use crate::settings::{self, SETTINGS_ID, SettingsTile};
 use crate::stats::{self, Stats};
@@ -17,6 +18,7 @@ use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState};
 use nook_platform::backdrop::{Backdrop, Tint};
 use nook_platform::hittest::{HitShape, HitTester};
 use nook_platform::material::{self, Applied};
+use nook_platform::notifications::{self, Notification, NotificationWatcher};
 use nook_platform::single_instance::InstanceGuard;
 use nook_platform::system::Battery;
 use nook_platform::{Hwnd, startup, system, wallpaper, window};
@@ -39,6 +41,20 @@ enum Page {
     Settings,
     /// A module's full-panel page (e.g. clipboard history), by module id.
     Module(&'static str),
+}
+
+/// A notification in the pill, with its app icon on the GPU.
+struct Toast {
+    n: Notification,
+    icon: Option<egui::TextureHandle>,
+}
+
+/// What the pill draws for a notification.
+struct NoticeView {
+    icon: Option<egui::TextureId>,
+    line: notify::Line,
+    /// Further arrivals during this display ("+N").
+    more: u32,
 }
 
 /// Minimum gap between blur clip/tint pushes while the shell animates.
@@ -121,6 +137,12 @@ pub struct NookApp {
     pushed: Option<PushedShape>,
     /// Hover-to-reveal while hidden for a fullscreen app.
     reveal: Reveal,
+    /// Windows toasts as they arrive; None if the listener is unavailable.
+    notifications: Option<NotificationWatcher>,
+    /// The notification the pill is showing.
+    notices: Notices<Toast>,
+    /// The pointer rested on the notification pill at the last frame.
+    notice_hover: bool,
     /// Forces the next frame to push its shape to the OS.
     shape_dirty: bool,
     /// When the backdrop last got a clip/tint push (see `BACKDROP_MIN_INTERVAL`).
@@ -201,6 +223,11 @@ impl NookApp {
         let sys = watcher::sample(hwnd, cfg.monitor == MonitorMode::Cursor);
         let (sys_tx, sys_rx) = unbounded();
         watcher::spawn(hwnd, watcher.clone(), sys_tx, ctx.clone()).context("spawning watcher")?;
+
+        let repaint = ctx.clone();
+        let notifications = NotificationWatcher::spawn(move || repaint.request_repaint())
+            .inspect_err(|e| tracing::warn!("notifications: {e}"))
+            .ok();
 
         let (accent_tx, accent_rx) = unbounded();
         spawn_wallpaper_accent(accent_tx.clone(), ctx.clone());
@@ -294,6 +321,9 @@ impl NookApp {
             hit,
             pushed: None,
             reveal: Reveal::default(),
+            notifications,
+            notices: Notices::default(),
+            notice_hover: false,
             shape_dirty: true,
             backdrop_pushed_at: None,
             was_inside: false,
@@ -722,6 +752,37 @@ impl NookApp {
 
     /// Puts plugin installs, updates and removals into effect while Nook
     /// runs: the registry, the grid layout and the hotkeys follow.
+    /// Puts new toasts in the pill. Dropped: Nook's own, any while the panel
+    /// is open, and any while Windows itself would hold toasts back
+    /// (fullscreen, presentation, Do Not Disturb / Focus).
+    fn take_notifications(&mut self, ctx: &egui::Context) {
+        let Some(watcher) = &self.notifications else {
+            return;
+        };
+        for n in watcher.poll() {
+            if notifications::is_own(&n.app_id, &n.app_name)
+                || self.shell.state.is_open()
+                || !notifications::can_show_now()
+            {
+                continue;
+            }
+            tracing::debug!("notification from {}", n.app_name);
+            let icon = n.icon.as_ref().map(|art| {
+                let image = egui::ColorImage::from_rgba_unmultiplied(
+                    [art.width, art.height],
+                    art.rgba.as_slice(),
+                );
+                ctx.load_texture(
+                    "nook-notification-icon",
+                    image,
+                    egui::TextureOptions::LINEAR,
+                )
+            });
+            self.notices.push(Toast { n, icon }, Self::now(ctx));
+            ctx.request_repaint();
+        }
+    }
+
     fn apply_plugin_changes(&mut self, ctx: &egui::Context) {
         let applied = nook_modules::plugins::apply_changes(&mut self.registry, ctx);
         if applied.added.is_empty() && applied.removed.is_empty() {
@@ -1031,6 +1092,98 @@ fn draw_pill(badges: Vec<Badge>, battery: Option<Battery>, ui: &mut Ui, rect: Re
         .request_repaint_after(Duration::from_secs(u64::from(clock.secs_to_next_minute)));
 }
 
+/// One line: the title in the bright color, then " · body" dimmer, cut with
+/// "…" at `max_width`.
+fn notice_job(
+    view: &NoticeView,
+    color: Color32,
+    dim: Color32,
+    max_width: f32,
+) -> egui::text::LayoutJob {
+    let font = |semibold: bool| {
+        if semibold {
+            Theme::font_semibold(SIZE_LABEL + 1.0)
+        } else {
+            Theme::font(SIZE_LABEL + 1.0)
+        }
+    };
+    let mut job = egui::text::LayoutJob::default();
+    job.append(
+        &view.line.title,
+        0.0,
+        egui::text::TextFormat::simple(font(true), color),
+    );
+    if let Some(body) = &view.line.body {
+        job.append(
+            &format!(" · {body}"),
+            0.0,
+            egui::text::TextFormat::simple(font(false), dim),
+        );
+    }
+    job.wrap = egui::text::TextWrapping {
+        max_width,
+        max_rows: 1,
+        break_anywhere: true,
+        overflow_character: Some('…'),
+    };
+    job
+}
+
+/// Collapsed pill while a notification shows: `[icon] Title · body…` and a
+/// "+N" for further arrivals at the right.
+fn draw_notice(view: &NoticeView, ui: &mut Ui, rect: Rect, theme: &Theme) {
+    const PAD: f32 = 15.0;
+    let painter = ui.painter();
+    let cy = rect.center().y;
+    let mut right = rect.max.x - PAD;
+    if view.more > 0 {
+        let ink = ink_text(
+            painter,
+            &format!("+{}", view.more),
+            Theme::font_semibold(SIZE_LABEL),
+            theme.pill_text_dim,
+            right,
+            cy,
+            true,
+        );
+        right = ink.min.x - notify::COUNT_GAP;
+    }
+    let icon = Rect::from_min_size(
+        pos2(rect.min.x + PAD, cy - notify::ICON / 2.0),
+        vec2(notify::ICON, notify::ICON),
+    );
+    let text_x = icon.max.x + notify::ICON_GAP;
+    // Nothing fits mid-spring until the pill has widened.
+    if right - text_x <= 24.0 {
+        return;
+    }
+    match view.icon {
+        Some(tex) => {
+            painter.add(
+                egui::epaint::RectShape::filled(icon, 5.0, Color32::WHITE)
+                    .with_texture(tex, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0))),
+            );
+        }
+        None => {
+            painter.text(
+                icon.center(),
+                egui::Align2::CENTER_CENTER,
+                nook_ui::icons::BELL,
+                icon_font(14.0, false),
+                theme.pill_text_dim,
+            );
+        }
+    }
+    let galley = painter.layout_job(notice_job(
+        view,
+        theme.pill_text,
+        theme.pill_text_dim,
+        right - text_x,
+    ));
+    let pos = pos2(text_x, cy - galley.size().y / 2.0);
+    painter.galley(pos, galley, theme.pill_text);
+}
+
 /// Width the pill springs to while media plays.
 const MEDIA_PILL_WIDTH: f32 = 300.0;
 
@@ -1256,6 +1409,7 @@ impl eframe::App for NookApp {
             self.wallpaper_accent = a.map(|[r, g, b]| Color32::from_rgb(r, g, b));
         }
         self.apply_plugin_changes(ctx);
+        self.take_notifications(ctx);
         let mut show = None;
         for m in self.registry.all_mut() {
             m.on_tick();
@@ -1306,25 +1460,58 @@ impl eframe::App for NookApp {
             .visible()
             .filter_map(|m| m.collapsed_badge())
             .collect();
-        // The pill widens to fit what's playing; the reveal hot zone follows.
-        self.shell.collapsed_width = media_badge(&badges).map(|(title, _)| {
-            let measure = |text: &str, font: FontId| {
-                ctx.layer_painter(egui::LayerId::background())
-                    .layout_no_wrap(text.to_owned(), font, Color32::WHITE)
-                    .size()
-                    .x
-            };
-            let left = match badges.iter().find_map(|b| match b {
-                Badge::Ring { label, .. } => Some(label.as_str()),
-                _ => None,
-            }) {
-                // Ring (2r) plus its gap, then the countdown.
-                Some(label) => 19.0 + measure(label, Theme::font_semibold(SIZE_BODY)),
-                None => measure(&system::clock().time, Theme::font_semibold(SIZE_BODY)),
-            };
-            let title_w = measure(title, Theme::font(SIZE_LABEL + 1.0));
-            media_pill_width(left, title_w, self.shell.metrics.collapsed.x)
+        // A notification takes over the pill until it expires or is clicked.
+        let t = Self::now(&ctx);
+        if let Some(at) = self.notices.tick(t, self.notice_hover) {
+            ctx.request_repaint_after_secs(((at - t).max(0.0)) as f32 + 0.01);
+        }
+        let notice = self.notices.current().map(|toast| NoticeView {
+            icon: toast.icon.as_ref().map(egui::TextureHandle::id),
+            line: notify::line(&toast.n, self.cfg.show_notification_text),
+            more: self.notices.more(),
         });
+        let measure = |text: &str, font: FontId| {
+            ctx.layer_painter(egui::LayerId::background())
+                .layout_no_wrap(text.to_owned(), font, Color32::WHITE)
+                .size()
+                .x
+        };
+        // The pill widens to fit the notification or what's playing; the
+        // reveal hot zone follows.
+        self.shell.collapsed_width = if let Some(view) = &notice {
+            let text_w = ctx
+                .layer_painter(egui::LayerId::background())
+                .layout_job(notice_job(
+                    view,
+                    theme.pill_text,
+                    theme.pill_text_dim,
+                    f32::INFINITY,
+                ))
+                .size()
+                .x;
+            let count_w = match view.more {
+                0 => 0.0,
+                n => measure(&format!("+{n}"), Theme::font_semibold(SIZE_LABEL)),
+            };
+            Some(notify::pill_width(
+                text_w,
+                count_w,
+                self.shell.metrics.collapsed.x,
+            ))
+        } else {
+            media_badge(&badges).map(|(title, _)| {
+                let left = match badges.iter().find_map(|b| match b {
+                    Badge::Ring { label, .. } => Some(label.as_str()),
+                    _ => None,
+                }) {
+                    // Ring (2r) plus its gap, then the countdown.
+                    Some(label) => 19.0 + measure(label, Theme::font_semibold(SIZE_BODY)),
+                    None => measure(&system::clock().time, Theme::font_semibold(SIZE_BODY)),
+                };
+                let title_w = measure(title, Theme::font(SIZE_LABEL + 1.0));
+                media_pill_width(left, title_w, self.shell.metrics.collapsed.x)
+            })
+        };
         self.update_hot_zone(&ctx, fullscreen_hidden && self.cfg.reveal_on_hover);
         let now = ctx.input(|i| i.time);
         let revealed = self.reveal.update(
@@ -1358,6 +1545,9 @@ impl eframe::App for NookApp {
             (typing && ctx.input(|i| i.focused)) || ctx.input(|i| !i.raw.hovered_files.is_empty());
         // Revealed over a fullscreen app: hover shows the pill, a click opens.
         self.shell.click_to_open = fullscreen_hidden && revealed;
+        // A notification owns the closed pill: hover can't open the panel and
+        // a click brings its app forward instead of pinning.
+        self.shell.capture_pill_click = notice.is_some() && !hidden;
         self.route_dropped_files(&ctx);
         self.shell.expanded_override = self.page_size(&ctx);
         let registry = &mut self.registry;
@@ -1367,7 +1557,10 @@ impl eframe::App for NookApp {
             &theme,
             hidden,
             composited,
-            |ui, rect, _alpha| draw_pill(badges, battery, ui, rect, &theme),
+            |ui, rect, _alpha| match &notice {
+                Some(view) => draw_notice(view, ui, rect, &theme),
+                None => draw_pill(badges, battery, ui, rect, &theme),
+            },
             |ui, cctx| match page {
                 Page::Bento => {
                     let mut tiles = registry.grid_mut(editing);
@@ -1417,6 +1610,18 @@ impl eframe::App for NookApp {
                 }
             },
         );
+
+        self.notice_hover = out.pointer_over && notice.is_some();
+        if out.pill_clicked
+            && let Some(toast) = self.notices.take()
+        {
+            let n = &toast.n;
+            self.notice_hover = false;
+            ctx.request_repaint();
+            if let Err(e) = notifications::bring_forward(&n.app_id, &n.hints()) {
+                tracing::debug!("notification click: bringing {} forward: {e}", n.app_name);
+            }
+        }
 
         if let Some(id) = clicked {
             self.stats.tool(id);

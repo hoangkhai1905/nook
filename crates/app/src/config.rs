@@ -108,6 +108,8 @@ pub struct Config {
     /// While hidden for a fullscreen app, resting the cursor where the pill
     /// sits brings it back. Only matters with `hide_in_fullscreen`.
     pub reveal_on_hover: bool,
+    /// Show a notification's text in the pill; off shows only who sent it.
+    pub show_notification_text: bool,
     pub hover_delay_ms: u32,
     pub collapse_grace_ms: u32,
     pub launch_at_startup: bool,
@@ -157,6 +159,7 @@ impl Default for Config {
             on_top: true,
             hide_in_fullscreen: false,
             reveal_on_hover: true,
+            show_notification_text: true,
             hover_delay_ms: 120,
             collapse_grace_ms: 250,
             launch_at_startup: false,
@@ -328,6 +331,7 @@ mod tests {
         assert_eq!(cfg.placement, Placement::Center);
         assert!(cfg.on_top);
         assert!(cfg.reveal_on_hover);
+        assert!(cfg.show_notification_text, "old configs show the text");
     }
 
     #[test]

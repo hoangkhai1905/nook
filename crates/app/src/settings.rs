@@ -24,7 +24,7 @@ const TOP_CARD: f32 = 154.0;
 /// Height of a collapsible card's clickable header.
 const DISCLOSURE: f32 = 44.0;
 /// Revealed height of each collapsible section's body.
-const BODY: [f32; 2] = [4.0 * ROW + 14.0, 3.0 * ROW + 28.0];
+const BODY: [f32; 2] = [4.0 * ROW + 14.0, 4.0 * ROW + 28.0];
 /// Page height with every section collapsed, panel padding included.
 const BASE: f32 =
     2.0 * PANEL_PADDING + HEADER + GAP + TOP_CARD + GAP + DISCLOSURE + GAP + DISCLOSURE;
@@ -685,6 +685,14 @@ fn advanced_body(ui: &mut Ui, rect: Rect, theme: &Theme, cfg: &mut Config, out: 
         &format!("Using {} · applies after restart", crate::diag::active_renderer()),
         theme,
     );
+    let mut notif_text = cfg.show_notification_text;
+    if row(&mut lui, "Show notification text", theme, |ui| {
+        widgets::toggle(ui, &mut notif_text, theme)
+            .on_hover_text("Off: the pill shows only who sent a notification")
+    }) {
+        cfg.show_notification_text = notif_text;
+        out.changed = true;
+    }
 
     // "Open log" at the right, level with the Renderer row.
     rui.add_space(ROW - 26.0);
