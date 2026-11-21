@@ -620,6 +620,23 @@ mod tests {
     use super::*;
 
     #[test]
+    fn pick_tab_matches_the_playing_title() {
+        let tabs: Vec<String> = [
+            "Facebook",
+            "TẬP 5 END | Trên Mạng Là Chị - YouTube - Audio playing",
+            "nhạt-fine - YouTube Music",
+        ]
+        .map(String::from)
+        .to_vec();
+        assert_eq!(pick_tab(&tabs, "TẬP 5 END | Trên Mạng Là Chị"), Some(1));
+        assert_eq!(pick_tab(&tabs, "  NHẠT-FINE "), Some(2), "trimmed, any case");
+        assert_eq!(pick_tab(&tabs, ""), None);
+        assert_eq!(pick_tab(&tabs, "   "), None);
+        assert_eq!(pick_tab(&tabs, "not open anywhere"), None);
+        assert_eq!(pick_tab(&[], "x"), None);
+    }
+
+    #[test]
     fn window_ownership() {
         assert!(app_matches("MSEdge", None, Some("msedge")));
         assert!(app_matches("chrome.exe", None, Some("Chrome")));
