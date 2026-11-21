@@ -1033,6 +1033,17 @@ fn draw_pill(badges: Vec<Badge>, battery: Option<Battery>, ui: &mut Ui, rect: Re
 
 /// Width the pill springs to while media plays.
 const MEDIA_PILL_WIDTH: f32 = 300.0;
+
+/// Pill width that fits the clock (`left_w`), the art, the title and the
+/// bars, between the normal pill (`min_w`) and [`MEDIA_PILL_WIDTH`]; longer
+/// titles end in "…". Mirrors the spacing in `draw_pill`.
+fn media_pill_width(left_w: f32, title_w: f32, min_w: f32) -> f32 {
+    const PAD: f32 = 15.0;
+    let bars = BAR_COUNT as f32 * BAR_W + (BAR_COUNT - 1) as f32 * BAR_GAP;
+    // +2: rounding slack so a title that fits isn't cut to "…".
+    let content = PAD + left_w + 10.0 + MEDIA_ART + 6.0 + title_w + 2.0 + 8.0 + bars + PAD;
+    content.clamp(min_w, MEDIA_PILL_WIDTH)
+}
 const MEDIA_ART: f32 = 22.0;
 const BAR_COUNT: usize = 4;
 const BAR_W: f32 = 2.5;
@@ -1292,8 +1303,25 @@ impl eframe::App for NookApp {
             .visible()
             .filter_map(|m| m.collapsed_badge())
             .collect();
-        // The pill widens while media plays; the reveal hot zone follows.
-        self.shell.collapsed_width = media_badge(&badges).map(|_| MEDIA_PILL_WIDTH);
+        // The pill widens to fit what's playing; the reveal hot zone follows.
+        self.shell.collapsed_width = media_badge(&badges).map(|(title, _)| {
+            let measure = |text: &str, font: FontId| {
+                ctx.layer_painter(egui::LayerId::background())
+                    .layout_no_wrap(text.to_owned(), font, Color32::WHITE)
+                    .size()
+                    .x
+            };
+            let left = match badges.iter().find_map(|b| match b {
+                Badge::Ring { label, .. } => Some(label.as_str()),
+                _ => None,
+            }) {
+                // Ring (2r) plus its gap, then the countdown.
+                Some(label) => 19.0 + measure(label, Theme::font_semibold(SIZE_BODY)),
+                None => measure(&system::clock().time, Theme::font_semibold(SIZE_BODY)),
+            };
+            let title_w = measure(title, Theme::font(SIZE_LABEL + 1.0));
+            media_pill_width(left, title_w, self.shell.metrics.collapsed.x)
+        });
         self.update_hot_zone(&ctx, fullscreen_hidden && self.cfg.reveal_on_hover);
         let now = ctx.input(|i| i.time);
         let revealed = self.reveal.update(
@@ -1536,6 +1564,16 @@ impl eframe::App for NookApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn media_pill_fits_short_titles_and_caps_long_ones() {
+        let short = media_pill_width(50.0, 40.0, 140.0);
+        let longer = media_pill_width(50.0, 80.0, 140.0);
+        assert!((140.0..MEDIA_PILL_WIDTH).contains(&short), "{short}");
+        assert_eq!(longer - short, 40.0, "grows one-for-one with the title");
+        assert_eq!(media_pill_width(50.0, 1000.0, 140.0), MEDIA_PILL_WIDTH);
+        assert_eq!(media_pill_width(0.0, 0.0, 140.0), 140.0);
+    }
 
     #[test]
     fn bars_stay_within_bounds() {

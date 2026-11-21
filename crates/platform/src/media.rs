@@ -158,8 +158,9 @@ impl Drop for Watched {
     }
 }
 
-/// Track identity used to decide whether the art must be reloaded.
-type ArtKey = (String, String, String);
+/// Hash of the thumbnail's bytes: the art is decoded again only when it
+/// changes (see `snapshot` for why it isn't keyed on the track).
+type ArtKey = u64;
 
 fn run(
     rx: &Receiver<Msg>,
@@ -254,25 +255,35 @@ fn snapshot(
         .api("TryGetMediaPropertiesAsync.join")?;
     let title = props.Title().map(|h| h.to_string()).unwrap_or_default();
     let artist = props.Artist().map(|h| h.to_string()).unwrap_or_default();
-    let album = props
-        .AlbumTitle()
-        .map(|h| h.to_string())
-        .unwrap_or_default();
 
     let info = session.GetPlaybackInfo().api("GetPlaybackInfo")?;
     let playing = info.PlaybackStatus().ok() == Some(Status::Playing);
     let controls = info.Controls().api("PlaybackInfo.Controls")?;
 
-    let key = (title.clone(), artist.clone(), album);
-    let art = match art_cache {
-        Some((k, art)) if *k == key => art.clone(),
-        _ => {
-            let art = load_art(&props)
-                .inspect_err(|e| tracing::debug!("album art: {e}"))
-                .ok()
-                .map(Arc::new);
-            *art_cache = Some((key, art.clone()));
-            art
+    // Browsers hand out the previous track's thumbnail for a moment after
+    // the title changes and fire another properties event once the real one
+    // is in, so the art follows the thumbnail's bytes, not the track name.
+    let art = match read_thumbnail(&props) {
+        Ok(bytes) => {
+            let mut h = std::collections::hash_map::DefaultHasher::new();
+            std::hash::Hash::hash(&bytes, &mut h);
+            let key = std::hash::Hasher::finish(&h);
+            match art_cache {
+                Some((k, art)) if *k == key => art.clone(),
+                _ => {
+                    let art = decode_art(&bytes)
+                        .inspect_err(|e| tracing::debug!("album art: {e}"))
+                        .ok()
+                        .map(Arc::new);
+                    *art_cache = Some((key, art.clone()));
+                    art
+                }
+            }
+        }
+        Err(e) => {
+            tracing::debug!("album art: {e}");
+            *art_cache = None;
+            None
         }
     };
 
@@ -322,9 +333,9 @@ fn now_ticks() -> i64 {
     (unix.as_secs() as i64 + EPOCH_DIFF) * 10_000_000 + i64::from(unix.subsec_nanos() / 100)
 }
 
-fn load_art(
+fn read_thumbnail(
     props: &windows::Media::Control::GlobalSystemMediaTransportControlsSessionMediaProperties,
-) -> Result<Art> {
+) -> Result<Vec<u8>> {
     let thumb = props.Thumbnail().api("Thumbnail")?;
     let stream = thumb
         .OpenReadAsync()
@@ -342,7 +353,11 @@ fn load_art(
         .api("LoadAsync.join")?;
     let mut bytes = vec![0u8; size as usize];
     reader.ReadBytes(&mut bytes).api("ReadBytes")?;
-    let image = image::load_from_memory(&bytes)
+    Ok(bytes)
+}
+
+fn decode_art(bytes: &[u8]) -> Result<Art> {
+    let image = image::load_from_memory(bytes)
         .map_err(|e| PlatformError::Other(format!("decoding album art: {e}")))?
         .thumbnail(ART_SIZE, ART_SIZE)
         .to_rgba8();
