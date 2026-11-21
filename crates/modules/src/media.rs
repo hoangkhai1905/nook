@@ -1,7 +1,7 @@
 //! Media: now playing from any app that reports to Windows (Spotify,
 //! browsers, the Media Player...) through SMTC, with album art, progress and
-//! previous / play-pause / next. A note glyph shows in the pill while
-//! something plays.
+//! previous / play-pause / next. While something plays the pill shows
+//! its title and art (`Badge::Media`).
 //!
 //! The SMTC work runs on `nook_platform::media`'s worker thread; this module
 //! only drains its snapshots in `on_tick` and sends commands back.
@@ -12,7 +12,7 @@ use egui::{
     UiBuilder, pos2, vec2,
 };
 use nook_platform::media::{MediaCommand, MediaWatcher, NowPlaying};
-use nook_ui::module::{Module, TileCtx, TileSize};
+use nook_ui::module::{Badge, Module, TileCtx, TileSize};
 use nook_ui::theme::{SIZE_LABEL, Theme, with_alpha};
 use nook_ui::{icons, paint, widgets};
 use std::sync::Arc;
@@ -26,6 +26,7 @@ pub struct Media {
     now: Option<NowPlaying>,
     /// Texture for `now.art`, keyed by the art's allocation.
     art: Option<(usize, TextureHandle)>,
+    ctx: Option<egui::Context>,
 }
 
 impl Media {
@@ -109,7 +110,20 @@ impl Module for Media {
         self.now.as_ref().is_some_and(|n| n.playing)
     }
 
+    fn collapsed_badge(&self) -> Option<Badge> {
+        let n = self.now.as_ref().filter(|n| n.playing)?;
+        Some(Badge::Media {
+            title: if n.title.is_empty() {
+                "Unknown title".to_owned()
+            } else {
+                n.title.clone()
+            },
+            art: self.art.as_ref().map(|(_, t)| t.id()),
+        })
+    }
+
     fn attach(&mut self, ctx: &egui::Context) {
+        self.ctx = Some(ctx.clone());
         let ctx = ctx.clone();
         match MediaWatcher::spawn(move || ctx.request_repaint()) {
             Ok(w) => self.watcher = Some(w),
@@ -122,6 +136,9 @@ impl Module for Media {
             self.now = snapshot;
             if self.now.as_ref().and_then(|n| n.art.as_ref()).is_none() {
                 self.art = None;
+            } else if let Some(ctx) = self.ctx.clone() {
+                // The pill reads the texture without a context.
+                self.art_texture(&ctx);
             }
         }
     }

@@ -866,7 +866,7 @@ fn draw_pill(badges: Vec<Badge>, battery: Option<Battery>, ui: &mut Ui, rect: Re
         Badge::Ring { progress, label } => Some((*progress, label.clone())),
         _ => None,
     });
-    match ring {
+    let left_end = match ring {
         Some((progress, label)) => {
             let r = 6.0;
             paint::ring(
@@ -886,7 +886,9 @@ fn draw_pill(badges: Vec<Badge>, battery: Option<Battery>, ui: &mut Ui, rect: Re
                 left + 2.0 * r + 7.0,
                 cy,
                 false,
-            );
+            )
+            .max
+            .x
         }
         None => {
             ink_text(
@@ -897,15 +899,25 @@ fn draw_pill(badges: Vec<Badge>, battery: Option<Battery>, ui: &mut Ui, rect: Re
                 left,
                 cy,
                 false,
-            );
+            )
+            .max
+            .x
         }
+    };
+
+    // Media: bars at the right edge, art and title between them and the
+    // clock. Other right-side badges sit left of the bars.
+    let media = media_badge(&badges);
+    if media.is_some() {
+        right = paint_bars(painter, right, cy, now, theme.pill_text) - 8.0;
+        ui.ctx().request_repaint_after(Duration::from_millis(33));
     }
 
     // Right: live glyphs (coffee, phone pulse...), otherwise battery or date.
     let mut any_right = false;
     for badge in &badges {
         match badge {
-            Badge::Ring { .. } => {}
+            Badge::Ring { .. } | Badge::Media { .. } => {}
             Badge::Glyph { icon } => {
                 let ink = ink_text(
                     painter,
@@ -934,7 +946,50 @@ fn draw_pill(badges: Vec<Badge>, battery: Option<Battery>, ui: &mut Ui, rect: Re
             }
         }
     }
-    if !any_right {
+    if let Some((title, art)) = media {
+        let x = left_end + 10.0;
+        let art_rect =
+            Rect::from_min_size(pos2(x, cy - MEDIA_ART / 2.0), vec2(MEDIA_ART, MEDIA_ART));
+        let text_x = art_rect.max.x + 6.0;
+        // Nothing fits mid-spring until the pill has widened.
+        if right - text_x > 24.0 {
+            match art {
+                Some(tex) => {
+                    painter.add(
+                        egui::epaint::RectShape::filled(art_rect, 5.0, Color32::WHITE)
+                            .with_texture(*tex, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0))),
+                    );
+                }
+                None => {
+                    painter.rect_filled(
+                        art_rect,
+                        5.0,
+                        theme::with_alpha(theme.pill_text_dim, 0.25),
+                    );
+                    painter.text(
+                        art_rect.center(),
+                        egui::Align2::CENTER_CENTER,
+                        nook_ui::icons::MUSIC_NOTES,
+                        icon_font(12.0, false),
+                        theme.pill_text_dim,
+                    );
+                }
+            }
+            let mut job = egui::text::LayoutJob::single_section(
+                title.to_owned(),
+                egui::text::TextFormat::simple(Theme::font(SIZE_LABEL + 1.0), theme.pill_text),
+            );
+            job.wrap = egui::text::TextWrapping {
+                max_width: right - text_x,
+                max_rows: 1,
+                break_anywhere: true,
+                overflow_character: Some('…'),
+            };
+            let galley = painter.layout_job(job);
+            let pos = pos2(text_x, cy - galley.size().y / 2.0);
+            painter.galley(pos, galley, theme.pill_text);
+        }
+    } else if !any_right {
         match battery {
             Some(b) => {
                 let text = ink_text(
@@ -974,6 +1029,48 @@ fn draw_pill(badges: Vec<Badge>, battery: Option<Battery>, ui: &mut Ui, rect: Re
     // One wake-up when the minute changes; nothing in between.
     ui.ctx()
         .request_repaint_after(Duration::from_secs(u64::from(clock.secs_to_next_minute)));
+}
+
+/// Width the pill springs to while media plays.
+const MEDIA_PILL_WIDTH: f32 = 300.0;
+const MEDIA_ART: f32 = 22.0;
+const BAR_COUNT: usize = 4;
+const BAR_W: f32 = 2.5;
+const BAR_GAP: f32 = 2.0;
+const BAR_MIN: f32 = 3.0;
+const BAR_MAX: f32 = 14.0;
+
+/// The playing media in the badges: title and album art.
+fn media_badge(badges: &[Badge]) -> Option<(&str, Option<&egui::TextureId>)> {
+    badges.iter().find_map(|b| match b {
+        Badge::Media { title, art } => Some((title.as_str(), art.as_ref())),
+        _ => None,
+    })
+}
+
+/// Height of visualizer bar `i` at time `t` seconds: a decorative sine mix,
+/// always within `BAR_MIN..=BAR_MAX`.
+fn bar_height(i: usize, t: f64) -> f32 {
+    let k = i as f64;
+    let wave = ((t * (5.0 + 1.7 * k) + k * 1.9).sin() * 0.5 + 0.5) as f32;
+    BAR_MIN + (BAR_MAX - BAR_MIN) * wave
+}
+
+/// Paints the bars ending at `right` (x), centered on `cy`; returns their
+/// left edge.
+fn paint_bars(painter: &egui::Painter, right: f32, cy: f32, t: f64, color: Color32) -> f32 {
+    let total = BAR_COUNT as f32 * BAR_W + (BAR_COUNT - 1) as f32 * BAR_GAP;
+    let left = right - total;
+    for i in 0..BAR_COUNT {
+        let h = bar_height(i, t);
+        let x = left + i as f32 * (BAR_W + BAR_GAP);
+        painter.rect_filled(
+            Rect::from_min_size(pos2(x, cy - h / 2.0), vec2(BAR_W, h)),
+            BAR_W / 2.0,
+            color,
+        );
+    }
+    left
 }
 
 fn battery_icon(b: Battery, theme: &Theme) -> (&'static str, Color32) {
@@ -1190,6 +1287,13 @@ impl eframe::App for NookApp {
             &self.cfg.look(),
         );
         let fullscreen_hidden = self.cfg.hide_in_fullscreen && self.sys.fullscreen;
+        let badges: Vec<Badge> = self
+            .registry
+            .visible()
+            .filter_map(|m| m.collapsed_badge())
+            .collect();
+        // The pill widens while media plays; the reveal hot zone follows.
+        self.shell.collapsed_width = media_badge(&badges).map(|_| MEDIA_PILL_WIDTH);
         self.update_hot_zone(&ctx, fullscreen_hidden && self.cfg.reveal_on_hover);
         let now = ctx.input(|i| i.time);
         let revealed = self.reveal.update(
@@ -1214,11 +1318,6 @@ impl eframe::App for NookApp {
         let update_status = self.updater.status();
         let editing = self.editing;
         let page = self.page;
-        let badges: Vec<Badge> = self
-            .registry
-            .visible()
-            .filter_map(|m| m.collapsed_badge())
-            .collect();
         let battery = self.sys.battery;
         let composited = self.backdrop.is_some();
         // Stay open while typing in the panel or playing a plugin game (and
@@ -1437,6 +1536,35 @@ impl eframe::App for NookApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn bars_stay_within_bounds() {
+        for i in 0..BAR_COUNT {
+            for step in 0..2000 {
+                let h = bar_height(i, step as f64 * 0.016);
+                assert!((BAR_MIN..=BAR_MAX).contains(&h), "{h}");
+            }
+        }
+    }
+
+    #[test]
+    fn media_pill_shows_only_for_a_playing_badge() {
+        assert!(media_badge(&[]).is_none());
+        let ring = Badge::Ring {
+            progress: 0.5,
+            label: "1:00".into(),
+        };
+        assert!(media_badge(std::slice::from_ref(&ring)).is_none());
+        let media = Badge::Media {
+            title: "Song".into(),
+            art: None,
+        };
+        // The timer ring stays in the badges and keeps the left slot.
+        let badges = [ring, media];
+        let (title, art) = media_badge(&badges).unwrap();
+        assert_eq!(title, "Song");
+        assert!(art.is_none());
+    }
 
     #[test]
     fn backdrop_wait_throttles() {

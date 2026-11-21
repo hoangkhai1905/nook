@@ -140,6 +140,9 @@ pub struct Shell {
     /// Expanded size wanted by the page on show (phone link), instead of
     /// `metrics.expanded`.
     pub expanded_override: Option<Vec2>,
+    /// Width the closed pill rests at instead of `metrics.collapsed.x`
+    /// (wider while media plays); the width spring animates to it.
+    pub collapsed_width: Option<f32>,
     /// Height the OS window must keep: it grows as soon as a taller page
     /// opens, and shrinks only once the shell has settled back down.
     tall: f32,
@@ -159,6 +162,7 @@ impl Shell {
             hold_open: false,
             click_to_open: false,
             expanded_override: None,
+            collapsed_width: None,
             tall: metrics.expanded.y,
             id: Id::new("nook-shell"),
             outline: Vec::new(),
@@ -170,6 +174,14 @@ impl Shell {
     /// The expanded size currently wanted.
     pub fn expanded(&self) -> Vec2 {
         self.expanded_override.unwrap_or(self.metrics.expanded)
+    }
+
+    /// The closed pill's size now (before hover swell).
+    fn collapsed(&self) -> Vec2 {
+        vec2(
+            self.collapsed_width.unwrap_or(self.metrics.collapsed.x),
+            self.metrics.collapsed.y,
+        )
     }
 
     /// OS window size that fits the shell now, including a taller page that
@@ -192,7 +204,7 @@ impl Shell {
     /// The pill at rest in its slot (no hover swell): the hot zone for
     /// revealing a hidden notch.
     pub fn rest_shape(&self, window: Rect) -> Squircle {
-        self.shape_for(window, self.metrics.collapsed, 0.0, self.placement.frac())
+        self.shape_for(window, self.collapsed(), 0.0, self.placement.frac())
     }
 
     fn shape_for(&self, window: Rect, size: Vec2, progress: f32, frac: f32) -> Squircle {
@@ -262,9 +274,9 @@ impl Shell {
         let open = targets.shell_open && !hidden;
         let expanded = self.expanded();
         let rest = if self.state.is_hovering_closed() {
-            m.collapsed + m.hover_swell
+            self.collapsed() + m.hover_swell
         } else {
-            m.collapsed
+            self.collapsed()
         };
         let shell_params = SpringParams::shell();
         let w = anim::spring_from(
