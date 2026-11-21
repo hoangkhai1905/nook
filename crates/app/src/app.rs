@@ -1259,6 +1259,9 @@ impl eframe::App for NookApp {
         let mut show = None;
         for m in self.registry.all_mut() {
             m.on_tick();
+            if m.take_close_request() {
+                self.shell.state.set_open(false, Self::now(ctx));
+            }
             if m.take_show_request() {
                 show = Some(m.id());
             }
