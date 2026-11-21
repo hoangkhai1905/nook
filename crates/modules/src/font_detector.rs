@@ -5,7 +5,7 @@
 //! against every installed font (`nook_platform::fontmatch`), the best
 //! match's name is copied, and the panel opens on a page listing the top
 //! matches with the sample that was compared. Click a match to copy its
-//! name. Ctrl+Alt+F starts it from anywhere.
+//! name. Ctrl+Shift+Alt+F starts it from anywhere.
 
 use egui::{Align2, Color32, ColorImage, Rect, Sense, TextureHandle, Ui, pos2, vec2};
 use nook_platform::clipboard;
@@ -147,7 +147,7 @@ impl Module for FontDetector {
     }
 
     fn default_hotkey(&self) -> Option<&'static str> {
-        Some("ctrl+alt+KeyF")
+        Some("ctrl+shift+alt+KeyF")
     }
 
     fn on_hotkey(&mut self) {
@@ -179,7 +179,7 @@ impl Module for FontDetector {
             self.copied = None;
         }
         if widgets::icon_button(header, icons::SELECTION, 26.0, false, theme)
-            .on_hover_text("Detect again (Ctrl+Alt+F)")
+            .on_hover_text("Detect again (Ctrl+Shift+Alt+F)")
             .clicked()
         {
             self.start();

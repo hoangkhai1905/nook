@@ -157,14 +157,29 @@ npx wrangler@4.153.0 d1 execute nook-stats --remote --file migrations/0002_usage
 
 - **Hover** the pill for 120 ms to expand. **Leave** for 250 ms to
   collapse.
-- **Click** the glass (or empty space on any page), press **Ctrl+Alt+N**,
+- **Click** the glass (or empty space on any page), press **Ctrl+Shift+Alt+N**,
   or use the tray's **Pin open** to keep the panel open. A small pin shows at the top center.
 - **Position:** Settings, Position: Left, Center or Right. In a corner
   the panel opens toward the other side.
 - **Always on top:** on by default. Turn it off in Settings or the tray
   to keep Nook behind your windows (it still shows on the desktop).
-  Ctrl+Alt+N brings it back on top.
+  Ctrl+Shift+Alt+N brings it back on top.
 - **Tray menu:** Settings, Pin open, Always on top, Launch at startup, Quit.
+- **Shortcuts:** the built-in tools use Ctrl+Shift+Alt+letter, because plain
+  Ctrl+Alt+letter is how Windows reports AltGr and would block typing
+  characters like `@` on some keyboard layouts. Hidden tiles do not claim
+  their shortcut. To change or turn off one, add a `[hotkeys]` table to
+  `config.toml` (module id to accelerator, empty string to disable), then
+  restart Nook:
+
+  ```toml
+  [hotkeys]
+  qr = "ctrl+shift+KeyU"   # move the QR tool
+  coffee = ""              # no shortcut for Coffee
+  ```
+
+  `toggle_hotkey` sets the pin shortcut. Installs that already saved
+  `toggle_hotkey = "ctrl+alt+KeyN"` keep it until you change it.
 - **Settings** (gear tile): theme (Auto/Dark/Light), accent
   (Wallpaper/Windows/Violet), material (Glass/Solid), position
   (Left/Center/Right), monitor (Primary/Follow cursor), hover delay,
@@ -190,16 +205,16 @@ npx wrangler@4.153.0 d1 execute nook-stats --remote --file migrations/0002_usage
   them first, so menus and video hold still, and a selection can span
   monitors. Hints and the loupe follow the cursor at each monitor's
   scaling. Esc or right click cancels.
-  - **Text extractor** (Ctrl+Alt+T): drag over text and it is copied, one
+  - **Text extractor** (Ctrl+Shift+Alt+T): drag over text and it is copied, one
     line per row. Hold Shift as you let go to get a single line. Uses the
     OCR built into Windows, for the languages whose OCR packs are installed.
-  - **Color picker** (Ctrl+Alt+P): a loupe follows the cursor. Scroll to
+  - **Color picker** (Ctrl+Shift+Alt+P): a loupe follows the cursor. Scroll to
     zoom, arrows nudge by a pixel (Shift: ten), click or Enter copies the
     color. Right click the tile for the history and the copy format (HEX,
     RGB, HSL, HSV, OKLCH).
-  - **Lens search** (Ctrl+Alt+L): drag over anything and Google Lens opens
+  - **Lens search** (Ctrl+Shift+Alt+L): drag over anything and Google Lens opens
     in your default browser with the results.
-  - **Font detector** (Ctrl+Alt+F): drag over a line of text. The text is
+  - **Font detector** (Ctrl+Shift+Alt+F): drag over a line of text. The text is
     redrawn in every installed font and compared pixel by pixel. If the
     [Lens](https://github.com/mixfont/lens) model by Mixfont is present, its
     neural network also names open-source fonts (983 families, mostly Google
@@ -238,14 +253,14 @@ npx wrangler@4.153.0 d1 execute nook-stats --remote --file migrations/0002_usage
 
 - **Tools** (second page of the grid). Each opens a full page; made Wide
   or Large, most show more on the tile itself.
-  - **QR code** (Ctrl+Alt+Q makes one from the clipboard): paste a link and
+  - **QR code** (Ctrl+Shift+Alt+Q makes one from the clipboard): paste a link and
     the code draws as you type. Styles: dots, liquid, round lines, rounded,
     square; corner eyes round, circle, leaf or square; solid colors,
     gradients or the accent; white, cream, night or clear background; your
     logo in the middle (drop an image on the notch, error correction rises
     to High) and a label under it. Copy, save a 1200 px PNG or a vector
     SVG to `Pictures\QR codes`, or drag the preview into any app.
-  - **Calculator** (Ctrl+Alt+K): answers as you type. `200 + 15%`,
+  - **Calculator** (Ctrl+Shift+Alt+K): answers as you type. `200 + 15%`,
     `20% of 150`, `2π`, `5!`, `17 mod 5`, `0xFF`, functions, DEG/RAD, `ans`,
     and unit conversion (`5 km to mi`, `72 f in c`, `2 GB in MB`,
     `90 min to h`). Whole answers show in hex and binary. Enter keeps the
@@ -261,7 +276,7 @@ npx wrangler@4.153.0 d1 execute nook-stats --remote --file migrations/0002_usage
   - **Quick launch**: apps, folders, files, websites and `ms-settings:`
     pages with their Explorer icons. Drop files on the open page, paste a
     path or URL, or browse; the pencil reorders and removes.
-  - **Voice memo** (Ctrl+Alt+R from anywhere): records the microphone to
+  - **Voice memo** (Ctrl+Shift+Alt+R from anywhere): records the microphone to
     WAV in `Music\Voice memos` with a live waveform and the time in the
     pill. Play, rename, drag into a chat, show in Explorer or delete.
 
@@ -398,14 +413,14 @@ drained in `on_tick`.
 
 **Modules**
 
-- [x] Coffee (keep-awake): always or 15 min to 2 h, Ctrl+Alt+C, cup glyph
+- [x] Coffee (keep-awake): always or 15 min to 2 h, Ctrl+Shift+Alt+C, cup glyph
   in the pill
 - [x] Timer: countdown (scroll or +/- to set, sound at zero, snooze) and
   stopwatch, ring and time mirrored in the pill. Pomodoro cycles still to do
 - [x] Clipboard history: text and images, in memory only, skips content
   marked private; the expand button opens the full history page
 - [x] Color picker: loupe with zoom and pixel nudging, HEX/RGB/HSL/HSV/OKLCH,
-  history page, Ctrl+Alt+P
+  history page, Ctrl+Shift+Alt+P
 - [x] Media (SMTC): title, artist, album art, progress, previous /
   play-pause / next; a note glyph in the pill while playing
 
@@ -415,25 +430,25 @@ drained in `on_tick`.
 - [x] Module toggles, ordering and sizes (tile editor)
 
 - [x] Text extractor: freeze, drag, Windows OCR, copied with line breaks
-  (Shift: one line), Ctrl+Alt+T
+  (Shift: one line), Ctrl+Shift+Alt+T
 - [x] Lens search: freeze, drag, opens Google Lens in the browser,
-  Ctrl+Alt+L
+  Ctrl+Shift+Alt+L
 - [x] Draw on screen: transparent ink layer over every monitor (pen,
   highlighter, eraser, five colors, undo, clear), draggable toolbar that
-  opens on the cursor's monitor, Ctrl+Alt+D to open, Esc to close
+  opens on the cursor's monitor, Ctrl+Shift+Alt+D to open, Esc to close
 
 - [x] Phone link: LocalSend file and text transfer (discovery, receive
   server, HTTPS client), scrcpy mirroring hosted in the panel with a
   control mode (Esc releases), adb notifications and phone keys, Wi-Fi adb
 
 - [x] QR code: five module styles, four eye styles, gradients, logo and
-  label, PNG/SVG/clipboard/drag export, Ctrl+Alt+Q
+  label, PNG/SVG/clipboard/drag export, Ctrl+Shift+Alt+Q
 - [x] Calculator: expression engine with percentages, functions and unit
-  conversion, keypad, history, Ctrl+Alt+K
+  conversion, keypad, history, Ctrl+Shift+Alt+K
 - [x] System monitor: CPU, memory, network charts, drives, top apps
 - [x] Calendar: month view, week numbers, events with reminders
 - [x] Quick launch: pinned apps, folders, files and sites with shell icons
-- [x] Voice memo: microphone to WAV, live waveform, playback, Ctrl+Alt+R
+- [x] Voice memo: microphone to WAV, live waveform, playback, Ctrl+Shift+Alt+R
 
 **Quality**
 

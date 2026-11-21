@@ -147,7 +147,7 @@ impl Module for Coffee {
     }
 
     fn default_hotkey(&self) -> Option<&'static str> {
-        Some("ctrl+alt+KeyC")
+        Some("ctrl+shift+alt+KeyC")
     }
 
     fn on_hotkey(&mut self) {

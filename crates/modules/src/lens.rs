@@ -6,7 +6,7 @@
 //! (the way the Search on Google Lens browser add-on does) and opened in
 //! the default browser, so the upload happens there, only when you ask,
 //! and you see the results as a normal Lens page. The page is deleted a
-//! minute later. Ctrl+Alt+L starts it from anywhere.
+//! minute later. Ctrl+Shift+Alt+L starts it from anywhere.
 //!
 //! The upload form is not a documented API; if Google changes it, this is
 //! the one place to update.
@@ -180,7 +180,7 @@ impl Module for Lens {
     }
 
     fn default_hotkey(&self) -> Option<&'static str> {
-        Some("ctrl+alt+KeyL")
+        Some("ctrl+shift+alt+KeyL")
     }
 
     fn on_hotkey(&mut self) {
