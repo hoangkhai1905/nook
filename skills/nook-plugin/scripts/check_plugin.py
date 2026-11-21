@@ -39,7 +39,7 @@ MANIFEST_KEYS = {
 }
 TILE_SIZES = {"small": (44, 44), "wide": (104, 36), "large": (104, 104)}
 PAGE_SIZE = (536, 168)
-TAKEN_HOTKEYS = {"ctrl+alt+" + k for k in "cdfklnpqrst"}
+TAKEN_HOTKEYS = {"ctrl+shift+alt+" + k for k in "cdfklnpqrst"}
 EXAMPLE_HOTKEYS = {"ctrl+alt+y": "todo"}
 POLL_TIMEOUT = 30
 

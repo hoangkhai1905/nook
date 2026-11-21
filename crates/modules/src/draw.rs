@@ -3,7 +3,7 @@
 //! eraser in five colors, with undo and clear. The toolbar opens on the
 //! monitor under the cursor.
 //!
-//! Open it from the tile or with Ctrl+Alt+D; Esc closes it and the ink goes
+//! Open it from the tile or with Ctrl+Shift+Alt+D; Esc closes it and the ink goes
 //! away. Ctrl+Z undoes the last stroke.
 //!
 //! The canvas is native (`nook_platform::ink`, a per-pixel-alpha layered
@@ -328,7 +328,7 @@ impl Module for Draw {
     }
 
     fn default_hotkey(&self) -> Option<&'static str> {
-        Some("ctrl+alt+KeyD")
+        Some("ctrl+shift+alt+KeyD")
     }
 
     fn on_hotkey(&mut self) {

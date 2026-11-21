@@ -1,6 +1,6 @@
 //! Voice memo: record your microphone from the notch.
 //!
-//! Press the big button (or Ctrl+Alt+R from anywhere) to record and again to
+//! Press the big button (or Ctrl+Shift+Alt+R from anywhere) to record and again to
 //! stop; the pill shows the time while it records. Memos are WAV files in
 //! `Music\Voice memos`, listed newest first with their waveform. Play one
 //! with a click, drag it into a chat or an email, rename it, show it in
@@ -457,7 +457,7 @@ impl VoiceMemo {
         let hint = if recording {
             "Click to stop and save"
         } else {
-            "Click to record  \u{00B7}  Ctrl+Alt+R anywhere"
+            "Click to record  \u{00B7}  Ctrl+Shift+Alt+R anywhere"
         };
         ui.painter().text(
             pos2(c.x, inner.max.y - 4.0),
@@ -809,7 +809,7 @@ impl Module for VoiceMemo {
     }
 
     fn default_hotkey(&self) -> Option<&'static str> {
-        Some("ctrl+alt+KeyR")
+        Some("ctrl+shift+alt+KeyR")
     }
 
     fn on_hotkey(&mut self) {
@@ -853,7 +853,7 @@ impl Module for VoiceMemo {
             return;
         }
         if kit::tool_tile(ui, ctx, icons::MICROPHONE, false)
-            .on_hover_text("Record a voice memo  \u{00B7}  Ctrl+Alt+R")
+            .on_hover_text("Record a voice memo  \u{00B7}  Ctrl+Shift+Alt+R")
             .clicked()
         {
             self.reload();

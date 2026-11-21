@@ -52,9 +52,10 @@ struct Hotkeys {
 }
 
 impl Hotkeys {
-    /// Registers a module's own shortcut, if it has one.
-    fn add_module(&mut self, m: &dyn Module) {
-        let Some(accel) = m.default_hotkey() else {
+    /// Registers a module's own shortcut, unless it has none, is hidden or
+    /// the config turns it off (see `Config::module_hotkey`).
+    fn add_module(&mut self, m: &dyn Module, cfg: &Config) {
+        let Some(accel) = cfg.module_hotkey(m.id(), m.default_hotkey()) else {
             return;
         };
         match HotKey::from_str(accel).map(|hk| (self.manager.register(hk), hk)) {
@@ -353,6 +354,13 @@ impl NookApp {
         }
         self.registry.arrange(&modules.order, &modules.disabled);
         self.registry.set_sizes(&modules.sizes);
+        // Hiding or showing a tile frees or takes its shortcut right away.
+        if let Some(hk) = &mut self.hotkeys {
+            for m in self.registry.all() {
+                hk.remove_module(m.id());
+                hk.add_module(m, &self.cfg);
+            }
+        }
         self.save_config();
     }
 
@@ -633,17 +641,17 @@ impl NookApp {
                 hk.remove_module(id);
             }
         }
-        let modules = &mut self.cfg.modules;
         for &id in &applied.added {
             // A plugin hidden before and installed again should show.
-            modules.disabled.retain(|d| d != id);
+            self.cfg.modules.disabled.retain(|d| d != id);
             if let (Some(hk), Some(m)) = (
                 &mut self.hotkeys,
                 self.registry.all().find(|m| m.id() == id),
             ) {
-                hk.add_module(m);
+                hk.add_module(m, &self.cfg);
             }
         }
+        let modules = &self.cfg.modules;
         self.registry.arrange(&modules.order, &modules.disabled);
         self.registry.set_sizes(&modules.sizes);
         self.save_config();
@@ -934,7 +942,7 @@ fn register_hotkeys(cfg: &Config, registry: &Registry, ctx: &egui::Context) -> R
         rx,
     };
     for m in registry.all() {
-        hotkeys.add_module(m);
+        hotkeys.add_module(m, cfg);
     }
     Ok(hotkeys)
 }

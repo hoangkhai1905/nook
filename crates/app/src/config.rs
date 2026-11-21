@@ -120,7 +120,22 @@ pub struct Config {
     pub renderer: Renderer,
     /// Random id the stats ping counts installs by; made on first run.
     pub install_id: String,
+    /// Per-module shortcut overrides by module id, in `global-hotkey`
+    /// syntax. An empty string turns that module's shortcut off.
+    pub hotkeys: std::collections::BTreeMap<String, String>,
     pub modules: ModulesConfig,
+}
+
+impl Config {
+    /// The shortcut to register for a module: none when its tile is hidden
+    /// or its override is empty, else the override, else its default.
+    pub fn module_hotkey<'a>(&'a self, id: &str, default: Option<&'a str>) -> Option<&'a str> {
+        if self.modules.disabled.iter().any(|d| d == id) {
+            return None;
+        }
+        let accel = self.hotkeys.get(id).map(String::as_str).or(default)?;
+        (!accel.is_empty()).then_some(accel)
+    }
 }
 
 impl Default for Config {
@@ -141,12 +156,13 @@ impl Default for Config {
             hover_delay_ms: 120,
             collapse_grace_ms: 250,
             launch_at_startup: false,
-            toggle_hotkey: "ctrl+alt+N".into(),
+            toggle_hotkey: "ctrl+shift+alt+KeyN".into(),
             plugin_dev: false,
             check_updates: true,
             usage_stats: true,
             renderer: Renderer::Auto,
             install_id: String::new(),
+            hotkeys: Default::default(),
             modules: ModulesConfig {
                 order: nook_modules::DEFAULT_ORDER
                     .iter()
@@ -250,6 +266,20 @@ mod tests {
         assert_eq!(cfg.hover_delay_ms, 120);
         assert_eq!(cfg.placement, Placement::Center);
         assert!(cfg.on_top);
+    }
+
+    #[test]
+    fn module_hotkey_override_disable_and_default() {
+        let mut cfg: Config =
+            toml::from_str("[hotkeys]\ncoffee = \"\"\nqr = \"ctrl+shift+KeyU\"").expect("parse");
+        let d = Some("ctrl+shift+alt+KeyX");
+        assert_eq!(cfg.module_hotkey("coffee", d), None);
+        assert_eq!(cfg.module_hotkey("qr", d), Some("ctrl+shift+KeyU"));
+        assert_eq!(cfg.module_hotkey("calc", d), d);
+        assert_eq!(cfg.module_hotkey("calc", None), None);
+        cfg.modules.disabled.push("qr".into());
+        assert_eq!(cfg.module_hotkey("qr", d), None);
+        assert!(Config::default().hotkeys.is_empty());
     }
 
     #[test]

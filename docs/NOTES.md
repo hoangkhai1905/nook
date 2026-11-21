@@ -330,12 +330,12 @@ Text extractor, lens search and the color picker share one overlay
 | Hover intent | The closed pill swells by 12 x 2 pt while the pointer rests on it (during the 120 ms debounce) | Immediate feedback before the panel opens. |
 | Pill position | Floating 6 pt below the top of the monitor's work area; 6 pt from the side in a corner | Reads as a notch without touching the edge, and stays clear of a top taskbar. |
 | Placement | Center by default; Left or Right corner in Settings (`placement`). Switching slides it across with a 3% overshoot spring | Corners suit wide monitors and keep the center free for browser tabs. |
-| Always on top | On by default (`on_top`). Off puts it behind app windows, above the desktop. Ctrl+Alt+N always brings it back on top | A notch that sits on the desktop like a widget is useful too; the hotkey is the way back when it is covered. |
+| Always on top | On by default (`on_top`). Off puts it behind app windows, above the desktop. Ctrl+Shift+Alt+N always brings it back on top | A notch that sits on the desktop like a widget is useful too; the hotkey is the way back when it is covered. |
 | Panel size | 568 x 236 | 8 x 3 grid of 60 px cells, 8 px gaps and 16 px padding. The 24 px bottom gutter holds the hover caption ("Media · Coming soon"). |
 | Expanded radius | 32 with a corner exponent of 4 | A squircle corner looks smaller than a circular one of the same radius. The pill uses exponent 2 (true capsule) and morphs to 4 as it opens. |
 | Shell spring | Width k=260, height k=220, both 4% overshoot | Height trails width slightly, so the morph feels organic rather than linear. |
-| Pin | Click on the glass (not a tile), the tray, or Ctrl+Alt+N | A pushpin glyph at the top center shows the pinned state. |
-| Toggle hotkey | `ctrl+alt+N` | Unused by Windows and common apps. Configurable as `toggle_hotkey`. |
+| Pin | Click on the glass (not a tile), the tray, or Ctrl+Shift+Alt+N | A pushpin glyph at the top center shows the pinned state. |
+| Toggle hotkey | `ctrl+shift+alt+KeyN` | Unused by Windows and common apps. Configurable as `toggle_hotkey`. |
 | Accent | Wallpaper dominant hue (saturation-weighted histogram), else `#7C5CFF` | Windows accent and fixed violet are options in Settings. |
 | Hover delay presets | Fast 60 / Normal 120 / Calm 250 ms | Normal matches the spec. |
 | Reduced motion | Springs snap and tweens drop to 0 ms | Follows "Animation effects" (`SPI_GETCLIENTAREAANIMATION`). |
@@ -343,6 +343,6 @@ Text extractor, lens search and the color picker share one overlay
 | Logs | `%APPDATA%\Nook\nook.log` (release), stderr (debug) | Level via `NOOK_LOG`, e.g. `NOOK_LOG=debug`. |
 | Config errors | A bad file is renamed `config.toml.bad` and defaults are used | Never crash on a typo. |
 | Dev flags | `--pinned`, `--settings`, `--page=<module id>` | Start expanded (or on the settings or a module's page) for screenshots. |
-| Screen tool hotkeys | Text extractor `ctrl+alt+T`, color picker `ctrl+alt+P`, lens `ctrl+alt+L` | Same Ctrl+Alt family as the others, and all were free here. PowerToys uses Win+Shift+T and Win+Shift+C, so both can run side by side. |
+| Screen tool hotkeys | Text extractor `ctrl+shift+alt+KeyT`, color picker `ctrl+shift+alt+KeyP`, lens `ctrl+shift+alt+KeyL` | Same Ctrl+Shift+Alt family as the others, and all were free here. PowerToys uses Win+Shift+T and Win+Shift+C, so both can run side by side. |
 | Color formats | HEX by default; RGB, HSL, HSV, OKLCH in modern CSS syntax (`rgb(18 154 227)`) | Pastes straight into CSS; OKLCH is what design tools now use. |
 | Switch | 36 x 22, knob inset 3 px with a shadow, off track with a rim | The old 34 x 20 knob nearly filled the track, and the off state read as a floating dot on dark glass. |
