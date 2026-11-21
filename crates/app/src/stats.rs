@@ -17,7 +17,9 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-const PING_URL: &str = "https://nook-stats.gegasmixes.workers.dev/ping";
+/// Where pings go. `None` sends nothing: the fork has no stats server yet.
+/// Deploy `telemetry/` (a Cloudflare Worker) and put its `/ping` URL here.
+const PING_URL: Option<&str> = None;
 /// Wait a little after start so a crash-on-launch loop doesn't count.
 const FIRST_PING: Duration = Duration::from_secs(30);
 /// How often the thread saves the counts and looks whether a new (UTC) day
@@ -83,14 +85,14 @@ impl Stats {
             builtin,
             open_since: None,
         };
-        if crate::update::installed_dir().is_none() {
-            // Dev builds and loose exes would only skew the numbers.
+        // Dev builds and loose exes would only skew the numbers.
+        let Some(url) = PING_URL.filter(|_| crate::update::installed_dir().is_some()) else {
             stats.enabled.store(false, Ordering::Relaxed);
             return stats;
-        }
+        };
         let spawned = std::thread::Builder::new()
             .name("nook-stats".into())
-            .spawn(move || run(&install_id, first, &flag, &usage));
+            .spawn(move || run(url, &install_id, first, &flag, &usage));
         if let Err(e) = spawned {
             tracing::warn!("spawning stats thread: {e}");
         }
@@ -144,7 +146,7 @@ impl Stats {
     }
 }
 
-fn run(id: &str, mut first: bool, enabled: &AtomicBool, usage: &Mutex<Usage>) {
+fn run(url: &str, id: &str, mut first: bool, enabled: &AtomicBool, usage: &Mutex<Usage>) {
     std::thread::sleep(FIRST_PING);
     let mut sent_day = None;
     let mut saved = Usage::default();
@@ -152,7 +154,7 @@ fn run(id: &str, mut first: bool, enabled: &AtomicBool, usage: &Mutex<Usage>) {
         let day = utc_day();
         let snapshot = usage.lock().unwrap_or_else(|e| e.into_inner()).clone();
         if enabled.load(Ordering::Relaxed) && sent_day != Some(day) {
-            match send(id, first, &snapshot) {
+            match send(url, id, first, &snapshot) {
                 Ok(()) => {
                     sent_day = Some(day);
                     first = false;
@@ -172,7 +174,7 @@ fn run(id: &str, mut first: bool, enabled: &AtomicBool, usage: &Mutex<Usage>) {
     }
 }
 
-fn send(id: &str, first: bool, usage: &Usage) -> Result<(), Box<ureq::Error>> {
+fn send(url: &str, id: &str, first: bool, usage: &Usage) -> Result<(), Box<ureq::Error>> {
     let body = serde_json::json!({
         "id": id,
         "version": env!("CARGO_PKG_VERSION"),
@@ -186,7 +188,7 @@ fn send(id: &str, first: bool, usage: &Usage) -> Result<(), Box<ureq::Error>> {
         .timeout(Duration::from_secs(15))
         .user_agent(concat!("Nook/", env!("CARGO_PKG_VERSION")))
         .build()
-        .post(PING_URL)
+        .post(url)
         .send_json(body)
         .map_err(Box::new)?;
     Ok(())
