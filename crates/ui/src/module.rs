@@ -89,6 +89,11 @@ pub trait Module: Send {
     fn take_page_request(&mut self) -> bool {
         false
     }
+    /// Asks the app to close the panel, e.g. after bringing another app's
+    /// window forward. Return true once per request.
+    fn take_close_request(&mut self) -> bool {
+        false
+    }
     /// Asks the app to open the panel (pinned) on this module's page, e.g.
     /// when results arrive from a hotkey. Return true once per request.
     fn take_show_request(&mut self) -> bool {

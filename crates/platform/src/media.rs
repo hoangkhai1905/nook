@@ -18,7 +18,21 @@ use windows::Media::Control::{
     GlobalSystemMediaTransportControlsSessionPlaybackStatus as Status,
 };
 use windows::Storage::Streams::DataReader;
+use windows::Win32::Foundation::{CloseHandle, HWND, LPARAM};
+use windows::Win32::Graphics::Dwm::{DWMWA_CLOAKED, DwmGetWindowAttribute};
+use windows::Win32::Storage::EnhancedStorage::PKEY_AppUserModel_ID;
+use windows::Win32::System::Com::CoTaskMemFree;
+use windows::Win32::System::Com::StructuredStorage::PropVariantToStringAlloc;
+use windows::Win32::System::Threading::{
+    OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW,
+};
 use windows::Win32::System::WinRT::{RO_INIT_MULTITHREADED, RoInitialize};
+use windows::Win32::UI::Shell::PropertiesSystem::{IPropertyStore, SHGetPropertyStoreForWindow};
+use windows::Win32::UI::WindowsAndMessaging::{
+    EnumWindows, GWL_EXSTYLE, GetWindowLongPtrW, GetWindowTextW, GetWindowThreadProcessId,
+    IsIconic, IsWindowVisible, SW_RESTORE, ShowWindow, WS_EX_TOOLWINDOW,
+};
+use windows::core::{BOOL, PWSTR};
 
 /// Album art, decoded and downscaled to at most [`ART_SIZE`] square.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -36,6 +50,8 @@ pub const ART_SIZE: u32 = 96;
 pub struct NowPlaying {
     /// Cleaned-up app id, e.g. "Spotify" or "chrome".
     pub source: String,
+    /// The session's raw `SourceAppUserModelId`, for finding its window.
+    pub app_id: String,
     pub title: String,
     pub artist: String,
     pub playing: bool,
@@ -289,6 +305,7 @@ fn snapshot(
 
     Ok(NowPlaying {
         source: clean_source(id),
+        app_id: id.to_owned(),
         title,
         artist,
         playing,
@@ -382,9 +399,167 @@ pub fn clean_source(id: &str) -> String {
     name.to_owned()
 }
 
+/// True if a window belongs to the media app `app_id`: its explicit
+/// AppUserModelID equals it (Chromium sets one per window, PWAs included), or
+/// the window's executable name matches the cleaned id ("msedge" for
+/// "MSEdge" or "msedge.exe").
+fn app_matches(app_id: &str, explicit: Option<&str>, exe_stem: Option<&str>) -> bool {
+    if explicit.is_some_and(|e| e.eq_ignore_ascii_case(app_id)) {
+        return true;
+    }
+    let name = clean_source(app_id);
+    !name.is_empty() && exe_stem.is_some_and(|s| s.eq_ignore_ascii_case(&name))
+}
+
+/// Index of the window to focus among `(belongs to the app, title)`
+/// candidates in z-order: the first app window whose title contains the
+/// media title, else the first app window.
+fn pick_window(candidates: &[(bool, String)], media_title: &str) -> Option<usize> {
+    let mut apps = candidates.iter().enumerate().filter(|(_, c)| c.0);
+    let first = apps.next()?.0;
+    let needle = media_title.to_lowercase();
+    if needle.is_empty() {
+        return Some(first);
+    }
+    let by_title = candidates
+        .iter()
+        .position(|c| c.0 && c.1.to_lowercase().contains(&needle));
+    Some(by_title.unwrap_or(first))
+}
+
+/// Brings the window of the app playing `title` to the front (restoring it
+/// if minimized). Returns false when the app has no suitable window.
+pub fn focus_app_window(app_id: &str, title: &str) -> Result<bool> {
+    let mut found: Vec<(HWND, String)> = Vec::new();
+    // SAFETY: the callback only runs during the call and `found` outlives it.
+    unsafe { EnumWindows(Some(collect), LPARAM(&raw mut found as isize)) }.api("EnumWindows")?;
+    let candidates: Vec<(bool, String)> = found
+        .iter()
+        .map(|(h, t)| {
+            let explicit = explicit_app_id(*h);
+            let stem = exe_stem(*h);
+            (
+                app_matches(app_id, explicit.as_deref(), stem.as_deref()),
+                t.clone(),
+            )
+        })
+        .collect();
+    let Some(i) = pick_window(&candidates, title) else {
+        return Ok(false);
+    };
+    let hwnd = found[i].0;
+    // SAFETY: plain calls; stale handles just fail.
+    unsafe {
+        if IsIconic(hwnd).as_bool() {
+            let _ = ShowWindow(hwnd, SW_RESTORE);
+        }
+    }
+    // Nook never activates, so the foreground lock needs the same input
+    // attachment trick as the embedded phone window.
+    crate::embed::give_focus(crate::window::Hwnd::from_raw(hwnd.0 as isize));
+    Ok(true)
+}
+
+/// `EnumWindows` callback: visible, titled, non-tool, uncloaked windows.
+unsafe extern "system" fn collect(hwnd: HWND, lparam: LPARAM) -> BOOL {
+    // SAFETY: `lparam` is the `Vec` passed by `focus_app_window`.
+    let out = unsafe { &mut *(lparam.0 as *mut Vec<(HWND, String)>) };
+    // SAFETY: read-only window queries into local buffers.
+    unsafe {
+        if !IsWindowVisible(hwnd).as_bool()
+            || GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32 & WS_EX_TOOLWINDOW.0 != 0
+        {
+            return true.into();
+        }
+        let mut cloaked = 0u32;
+        let _ = DwmGetWindowAttribute(
+            hwnd,
+            DWMWA_CLOAKED,
+            (&raw mut cloaked).cast(),
+            size_of::<u32>() as u32,
+        );
+        let mut buf = [0u16; 256];
+        let n = GetWindowTextW(hwnd, &mut buf).max(0) as usize;
+        if cloaked == 0 && n > 0 {
+            out.push((hwnd, String::from_utf16_lossy(&buf[..n])));
+        }
+    }
+    true.into()
+}
+
+/// The window's explicit AppUserModelID, if it set one.
+fn explicit_app_id(hwnd: HWND) -> Option<String> {
+    // SAFETY: property store of a window; the PWSTR is freed after copying.
+    unsafe {
+        let store: IPropertyStore = SHGetPropertyStoreForWindow(hwnd).ok()?;
+        let value = store.GetValue(&PKEY_AppUserModel_ID).ok()?;
+        let s = PropVariantToStringAlloc(&value).ok()?;
+        let id = s.to_string().ok().filter(|id| !id.is_empty());
+        CoTaskMemFree(Some(s.0 as *const _));
+        id
+    }
+}
+
+/// File stem of the window's process executable ("msedge").
+fn exe_stem(hwnd: HWND) -> Option<String> {
+    // SAFETY: query-only process handle, closed right after.
+    unsafe {
+        let mut pid = 0;
+        GetWindowThreadProcessId(hwnd, Some(&mut pid));
+        let process = OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid).ok()?;
+        let mut buf = [0u16; 520];
+        let mut len = buf.len() as u32;
+        let ok = QueryFullProcessImageNameW(
+            process,
+            PROCESS_NAME_WIN32,
+            PWSTR(buf.as_mut_ptr()),
+            &mut len,
+        );
+        let _ = CloseHandle(process);
+        ok.ok()?;
+        let path = String::from_utf16_lossy(&buf[..len as usize]);
+        let file = path.rsplit(['\\', '/']).next()?;
+        Some(file.strip_suffix(".exe").unwrap_or(file).to_owned())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn window_ownership() {
+        assert!(app_matches("MSEdge", None, Some("msedge")));
+        assert!(app_matches("chrome.exe", None, Some("Chrome")));
+        assert!(app_matches(
+            "SpotifyAB.SpotifyMusic_x!Spotify",
+            None,
+            Some("spotify")
+        ));
+        assert!(app_matches("Chrome.PWA", Some("chrome.pwa"), Some("other")));
+        assert!(!app_matches("MSEdge", None, Some("chrome")));
+        assert!(!app_matches(
+            "F0DC299D809B9700",
+            None,
+            Some("F0DC299D809B9700")
+        ));
+        assert!(!app_matches("MSEdge", None, None));
+    }
+
+    #[test]
+    fn window_choice() {
+        let c = |a: bool, t: &str| (a, t.to_owned());
+        let wins = [
+            c(false, "Song - Notes"),
+            c(true, "Inbox"),
+            c(true, "Song - YouTube"),
+        ];
+        assert_eq!(pick_window(&wins, "song"), Some(2));
+        assert_eq!(pick_window(&wins, "nothing"), Some(1));
+        assert_eq!(pick_window(&wins, ""), Some(1));
+        assert_eq!(pick_window(&[c(false, "Song")], "Song"), None);
+        assert_eq!(pick_window(&[], "Song"), None);
+    }
 
     #[test]
     fn source_names() {
@@ -401,6 +576,7 @@ mod tests {
     fn paused_position_does_not_advance() {
         let np = NowPlaying {
             source: String::new(),
+            app_id: String::new(),
             title: String::new(),
             artist: String::new(),
             playing: false,

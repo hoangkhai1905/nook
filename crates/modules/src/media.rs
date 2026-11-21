@@ -8,10 +8,10 @@
 
 use egui::text::{LayoutJob, TextFormat, TextWrapping};
 use egui::{
-    Align2, Color32, ColorImage, Pos2, Rect, Response, TextureHandle, TextureOptions, Ui,
+    Align2, Color32, ColorImage, Pos2, Rect, Response, Sense, TextureHandle, TextureOptions, Ui,
     UiBuilder, pos2, vec2,
 };
-use nook_platform::media::{MediaCommand, MediaWatcher, NowPlaying};
+use nook_platform::media::{self, MediaCommand, MediaWatcher, NowPlaying};
 use nook_ui::module::{Badge, Module, TileCtx, TileSize};
 use nook_ui::theme::{SIZE_LABEL, Theme, with_alpha};
 use nook_ui::{icons, paint, widgets};
@@ -27,6 +27,8 @@ pub struct Media {
     /// Texture for `now.art`, keyed by the art's allocation.
     art: Option<(usize, TextureHandle)>,
     ctx: Option<egui::Context>,
+    /// Set after bringing the app forward; the app then closes the panel.
+    close: bool,
 }
 
 impl Media {
@@ -131,6 +133,10 @@ impl Module for Media {
         }
     }
 
+    fn take_close_request(&mut self) -> bool {
+        std::mem::take(&mut self.close)
+    }
+
     fn on_tick(&mut self) {
         if let Some(snapshot) = self.watcher.as_ref().and_then(MediaWatcher::poll) {
             self.now = snapshot;
@@ -172,6 +178,20 @@ impl Module for Media {
             );
             return;
         };
+
+        // Art, source, title and artist bring the app's window forward. The
+        // transport buttons below are drawn later, so they win their clicks.
+        let open_area = Rect::from_min_max(rect.min, pos2(rect.max.x, rect.min.y + ART + 36.0));
+        let open = ui
+            .interact(open_area, ui.id().with("media-open"), Sense::click())
+            .on_hover_cursor(egui::CursorIcon::PointingHand);
+        if open.clicked() {
+            match media::focus_app_window(&now.app_id, &now.title) {
+                Ok(true) => self.close = true,
+                Ok(false) => tracing::debug!("media: no window for {}", now.app_id),
+                Err(e) => tracing::debug!("media: focusing {}: {e}", now.app_id),
+            }
+        }
 
         // Album art, or a placeholder.
         let art_rect = Rect::from_min_size(rect.min, vec2(ART, ART));
