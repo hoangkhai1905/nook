@@ -19,8 +19,9 @@ pub const SETTINGS_ID: &str = "settings";
 const GAP: f32 = 8.0;
 const HEADER: f32 = 28.0;
 const ROW: f32 = 28.0;
-/// Height of the Appearance and Behavior cards (title + four rows).
-const TOP_CARD: f32 = 154.0;
+/// Height of the Appearance and Behavior cards (title + five rows: the
+/// taller Appearance column sets it).
+const TOP_CARD: f32 = 154.0 + ROW;
 /// Height of a collapsible card's clickable header.
 const DISCLOSURE: f32 = 44.0;
 /// Revealed height of each collapsible section's body.
