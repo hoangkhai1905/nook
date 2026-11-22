@@ -176,7 +176,9 @@ impl Notch {
             (pos2(min.x - fl, min.y + fl), fl, 0.0, -90.0),           // left flare
         ];
         for (c, radius, start, sweep) in arcs {
-            for s in 0..=CORNER_SEGMENTS {
+            // A zero-radius corner (no flare against a screen side) is one point.
+            let n = if radius < 0.01 { 0 } else { CORNER_SEGMENTS };
+            for s in 0..=n {
                 let deg = start + sweep * s as f32 / CORNER_SEGMENTS as f32;
                 let (sin, cos) = deg.to_radians().sin_cos();
                 pts.push(c + vec2(cos, sin) * radius);
