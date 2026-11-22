@@ -157,6 +157,10 @@ pub struct Shell {
     /// Width the closed pill rests at instead of `metrics.collapsed.x`
     /// (wider while media plays); the width spring animates to it.
     pub collapsed_width: Option<f32>,
+    /// Height the closed shell rests at instead of `metrics.collapsed.y` (a
+    /// notification card hanging from the pill). Progress is measured from
+    /// it, so the pill content stays up and the panel content stays hidden.
+    pub collapsed_height: Option<f32>,
     /// Height the OS window must keep: it grows as soon as a taller page
     /// opens, and shrinks only once the shell has settled back down.
     tall: f32,
@@ -178,6 +182,7 @@ impl Shell {
             capture_pill_click: false,
             expanded_override: None,
             collapsed_width: None,
+            collapsed_height: None,
             tall: metrics.expanded.y,
             id: Id::new("nook-shell"),
             outline: Vec::new(),
@@ -195,7 +200,7 @@ impl Shell {
     fn collapsed(&self) -> Vec2 {
         vec2(
             self.collapsed_width.unwrap_or(self.metrics.collapsed.x),
-            self.metrics.collapsed.y,
+            self.collapsed_height.unwrap_or(self.metrics.collapsed.y),
         )
     }
 
@@ -304,7 +309,8 @@ impl Shell {
         // width changes of the resting pill use the bouncier fast one.
         let big = self
             .last_shape
-            .is_some_and(|s| s.rect.height() > m.collapsed.y + m.hover_swell.y + 2.0);
+            .is_some_and(|s| s.rect.height() > m.collapsed.y + m.hover_swell.y + 2.0)
+            || self.collapsed_height.is_some();
         let shell_params = if open || big {
             SpringParams::spatial()
         } else {
@@ -335,7 +341,8 @@ impl Shell {
 
         // Progress is measured against the regular panel, so a taller page
         // reads as fully open (1.0) instead of re-running the morph.
-        let mut progress = ((h - m.collapsed.y) / (m.expanded.y - m.collapsed.y)).max(0.0);
+        let base = self.collapsed().y;
+        let mut progress = ((h - base) / (m.expanded.y - base)).max(0.0);
         if expanded.y > m.expanded.y {
             progress = progress.min(1.0);
         }

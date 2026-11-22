@@ -114,6 +114,40 @@ fn first_line(text: &str) -> String {
         .to_owned()
 }
 
+/// The notification card: app name, title, and body (up to two lines).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Card {
+    pub app: String,
+    pub title: String,
+    pub body: Option<String>,
+}
+
+/// Card size: fixed width, height without and with the "+N more" row.
+pub const CARD_W: f32 = 360.0;
+pub const CARD_H: f32 = 112.0;
+pub const CARD_H_MORE: f32 = 130.0;
+
+/// With text off the card shows only the app (name and logo).
+pub fn card(n: &Notification, show_text: bool) -> Card {
+    let title = if show_text && !n.title.is_empty() {
+        n.title.clone()
+    } else {
+        n.app_name.clone()
+    };
+    let body = n
+        .body
+        .lines()
+        .map(str::trim)
+        .filter(|l| !l.is_empty())
+        .collect::<Vec<_>>()
+        .join(" ");
+    Card {
+        app: n.app_name.clone(),
+        title,
+        body: (show_text && !body.is_empty()).then_some(body),
+    }
+}
+
 /// Pill width for a line `text_w` wide and a "+N" `count_w` wide (0 for
 /// none), between the normal pill (`min_w`) and [`PILL_MAX_WIDTH`]; longer
 /// text ends in "…".
@@ -201,6 +235,19 @@ mod tests {
         // No title: the app name stands in; no body: none.
         let l = line(&notification("", ""), true);
         assert_eq!((l.title.as_str(), l.body), ("Slack", None));
+    }
+
+    #[test]
+    fn card_hides_text_when_off() {
+        let n = notification("Alice", "hi\n\n there");
+        let c = card(&n, true);
+        assert_eq!(
+            (c.title.as_str(), c.body.as_deref()),
+            ("Alice", Some("hi there"))
+        );
+        let c = card(&n, false);
+        assert_eq!((c.title.as_str(), c.body), ("Slack", None));
+        assert_eq!(card(&notification("", ""), true).title, "Slack");
     }
 
     #[test]

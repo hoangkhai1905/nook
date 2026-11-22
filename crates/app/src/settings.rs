@@ -24,8 +24,10 @@ const ROW: f32 = 28.0;
 const TOP_CARD: f32 = 154.0 + ROW;
 /// Height of a collapsible card's clickable header.
 const DISCLOSURE: f32 = 44.0;
+/// Height of one `hint` line (Advanced gained one under the notification row).
+const HINT: f32 = 16.0;
 /// Revealed height of each collapsible section's body.
-const BODY: [f32; 2] = [3.0 * ROW + 14.0, 4.0 * ROW + 28.0];
+const BODY: [f32; 2] = [3.0 * ROW + 14.0, 4.0 * ROW + 28.0 + HINT];
 /// Page height with every section collapsed, panel padding included.
 const BASE: f32 =
     2.0 * PANEL_PADDING + HEADER + GAP + TOP_CARD + GAP + DISCLOSURE + GAP + DISCLOSURE;
@@ -622,7 +624,10 @@ fn advanced_body(ui: &mut Ui, rect: Rect, theme: &Theme, cfg: &mut Config, out: 
     }
     hint(
         &mut lui,
-        &format!("Using {} · applies after restart", crate::diag::active_renderer()),
+        &format!(
+            "Using {} · applies after restart",
+            crate::diag::active_renderer()
+        ),
         theme,
     );
     let mut notif_text = cfg.show_notification_text;
@@ -633,6 +638,11 @@ fn advanced_body(ui: &mut Ui, rect: Rect, theme: &Theme, cfg: &mut Config, out: 
         cfg.show_notification_text = notif_text;
         out.changed = true;
     }
+    hint(
+        &mut lui,
+        "Turn off Windows banners for these apps too",
+        theme,
+    );
 
     // "Open log" at the right, level with the Renderer row.
     rui.add_space(ROW - 26.0);
@@ -642,9 +652,16 @@ fn advanced_body(ui: &mut Ui, rect: Rect, theme: &Theme, cfg: &mut Config, out: 
         pos2(log_row.max.x - 120.0, log_row.center().y - 13.0),
         vec2(120.0, 26.0),
     );
-    if nook_modules::kit::button(ui, open_log, "Open log", Some(icons::FILE_TEXT), false, theme)
-        .on_hover_text("Shows nook.log in Explorer, to attach to a bug report")
-        .clicked()
+    if nook_modules::kit::button(
+        ui,
+        open_log,
+        "Open log",
+        Some(icons::FILE_TEXT),
+        false,
+        theme,
+    )
+    .on_hover_text("Shows nook.log in Explorer, to attach to a bug report")
+    .clicked()
         && let Some(path) = crate::diag::log_path()
         && let Err(e) = nook_platform::shell::reveal(&path)
     {

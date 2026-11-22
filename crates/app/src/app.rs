@@ -55,6 +55,9 @@ struct NoticeView {
     line: notify::Line,
     /// Further arrivals during this display ("+N").
     more: u32,
+    /// The expanded card (`None`: the one-line pill, over fullscreen or an
+    /// open panel).
+    card: Option<notify::Card>,
 }
 
 /// Minimum gap between blur clip/tint pushes while the shell animates.
@@ -1195,6 +1198,144 @@ fn draw_notice(view: &NoticeView, ui: &mut Ui, rect: Rect, theme: &Theme) {
     painter.galley(pos, galley, theme.text);
 }
 
+/// The notification card hanging from the top edge: header (icon, app, "now",
+/// close), the app logo with title and body, and "+N more". Laid out at the
+/// full card size from the top-left of `rect`, so it stays put while the
+/// shell springs open (the shell clips it). Returns whether X was clicked.
+fn draw_card(
+    view: &NoticeView,
+    card: &notify::Card,
+    ui: &mut Ui,
+    rect: Rect,
+    theme: &Theme,
+) -> bool {
+    const PAD: f32 = 16.0;
+    const LOGO: f32 = 56.0;
+    let r = &theme.roles;
+    let tex = |painter: &egui::Painter, to: Rect, radius: f32, id: egui::TextureId| {
+        painter.add(
+            egui::epaint::RectShape::filled(to, radius, Color32::WHITE)
+                .with_texture(id, Rect::from_min_max(pos2(0.0, 0.0), pos2(1.0, 1.0))),
+        );
+    };
+    let painter = ui.painter().clone();
+
+    // Header.
+    let cy = rect.min.y + 12.0 + 9.0;
+    let small = Rect::from_center_size(pos2(rect.min.x + PAD + 7.0, cy), vec2(14.0, 14.0));
+    match view.icon {
+        Some(id) => tex(&painter, small, 4.0, id),
+        None => {
+            painter.text(
+                small.center(),
+                egui::Align2::CENTER_CENTER,
+                nook_ui::icons::BELL,
+                icon_font(13.0, false),
+                theme.text_dim,
+            );
+        }
+    }
+    let app = ink_text(
+        &painter,
+        &card.app,
+        Theme::font(SIZE_LABEL + 1.0),
+        theme.text_dim,
+        small.max.x + 8.0,
+        cy,
+        false,
+    );
+    ink_text(
+        &painter,
+        "· now",
+        Theme::font(SIZE_LABEL + 1.0),
+        theme.text_faint,
+        app.max.x + 6.0,
+        cy,
+        false,
+    );
+    let x = Rect::from_center_size(
+        pos2(rect.min.x + notify::CARD_W - PAD - 8.0, cy),
+        vec2(22.0, 22.0),
+    );
+    let x_resp = ui.interact(x, egui::Id::new("notice-x"), egui::Sense::click());
+    if x_resp.hovered() {
+        painter.circle_filled(x.center(), 11.0, r.surface_container_high);
+    }
+    painter.text(
+        x.center(),
+        egui::Align2::CENTER_CENTER,
+        nook_ui::icons::X,
+        icon_font(12.0, false),
+        theme.text_dim,
+    );
+
+    // Logo (or the app's first letter) with the title and body beside it.
+    let logo = Rect::from_min_size(
+        pos2(rect.min.x + PAD, rect.min.y + 12.0 + 18.0 + 8.0),
+        vec2(LOGO, LOGO),
+    );
+    match view.icon {
+        Some(id) => tex(&painter, logo, 16.0, id),
+        None => {
+            painter.rect_filled(logo, 16.0, r.primary_container);
+            let letter = card
+                .app
+                .chars()
+                .next()
+                .unwrap_or('?')
+                .to_uppercase()
+                .to_string();
+            painter.text(
+                logo.center(),
+                egui::Align2::CENTER_CENTER,
+                letter,
+                Theme::font_semibold(24.0),
+                r.on_primary_container,
+            );
+        }
+    }
+    let text_x = logo.max.x + 12.0;
+    let width = rect.min.x + notify::CARD_W - PAD - text_x;
+    let layout = |text: &str, font: FontId, color: Color32, rows: usize| {
+        let mut job = egui::text::LayoutJob::simple_singleline(text.to_owned(), font, color);
+        job.wrap = egui::text::TextWrapping {
+            max_width: width,
+            max_rows: rows,
+            break_anywhere: false,
+            overflow_character: Some('…'),
+        };
+        painter.layout_job(job)
+    };
+    let title = layout(
+        &card.title,
+        Theme::font_semibold(SIZE_BODY + 1.0),
+        theme.text,
+        1,
+    );
+    let title_h = title.size().y;
+    painter.galley(pos2(text_x, logo.min.y), title, theme.text);
+    if let Some(body) = &card.body {
+        let galley = layout(body, Theme::font(SIZE_BODY), theme.text_dim, 2);
+        painter.galley(
+            pos2(text_x, logo.min.y + title_h + 2.0),
+            galley,
+            theme.text_dim,
+        );
+    }
+    if view.more > 0 {
+        ink_text(
+            &painter,
+            &format!("+{} more", view.more),
+            Theme::font_semibold(SIZE_LABEL),
+            r.primary,
+            logo.min.x,
+            logo.max.y + 14.0,
+            false,
+        );
+    }
+    x_resp.clicked()
+}
+
 /// Width the pill springs to while media plays.
 const MEDIA_PILL_WIDTH: f32 = 300.0;
 
@@ -1475,10 +1616,21 @@ impl eframe::App for NookApp {
         if let Some(at) = self.notices.tick(t, self.notice_hover) {
             ctx.request_repaint_after_secs(((at - t).max(0.0)) as f32 + 0.01);
         }
+        // The card grows out of the closed pill; over a fullscreen app or an
+        // open panel the one-line pill stays.
+        let as_card = !self.sys.fullscreen && !self.shell.state.is_open();
         let notice = self.notices.current().map(|toast| NoticeView {
             icon: toast.icon.as_ref().map(egui::TextureHandle::id),
             line: notify::line(&toast.n, self.cfg.show_notification_text),
             more: self.notices.more(),
+            card: as_card.then(|| notify::card(&toast.n, self.cfg.show_notification_text)),
+        });
+        self.shell.collapsed_height = notice.as_ref().filter(|v| v.card.is_some()).map(|v| {
+            if v.more > 0 {
+                notify::CARD_H_MORE
+            } else {
+                notify::CARD_H
+            }
         });
         let measure = |text: &str, font: FontId| {
             ctx.layer_painter(egui::LayerId::background())
@@ -1491,20 +1643,24 @@ impl eframe::App for NookApp {
         // The pill widens to fit the notification or what's playing; the
         // reveal hot zone follows.
         self.shell.collapsed_width = if let Some(view) = &notice {
-            let text_w = ctx
-                .layer_painter(egui::LayerId::background())
-                .layout_job(notice_job(view, theme.text, theme.text_dim, f32::INFINITY))
-                .size()
-                .x;
-            let count_w = match view.more {
-                0 => 0.0,
-                n => measure(&format!("+{n}"), Theme::font_semibold(SIZE_LABEL)),
-            };
-            Some(notify::pill_width(
-                text_w,
-                count_w,
-                self.shell.metrics.collapsed.x,
-            ))
+            if view.card.is_some() {
+                Some(notify::CARD_W)
+            } else {
+                let text_w = ctx
+                    .layer_painter(egui::LayerId::background())
+                    .layout_job(notice_job(view, theme.text, theme.text_dim, f32::INFINITY))
+                    .size()
+                    .x;
+                let count_w = match view.more {
+                    0 => 0.0,
+                    n => measure(&format!("+{n}"), Theme::font_semibold(SIZE_LABEL)),
+                };
+                Some(notify::pill_width(
+                    text_w,
+                    count_w,
+                    self.shell.metrics.collapsed.x,
+                ))
+            }
         } else {
             media_badge(&badges).map(|(title, _)| {
                 let left = match badges.iter().find_map(|b| match b {
@@ -1540,6 +1696,7 @@ impl eframe::App for NookApp {
         let mut settings_out = settings::PageOutput::default();
         let mut grid_out = bento::BentoOutput::default();
         let mut update_clicked = false;
+        let mut notice_closed = false;
         let update_status = self.updater.status();
         let editing = self.editing;
         let page = self.page;
@@ -1565,7 +1722,10 @@ impl eframe::App for NookApp {
             hidden,
             composited,
             |ui, rect, _alpha| match &notice {
-                Some(view) => draw_notice(view, ui, rect, &theme),
+                Some(view) => match &view.card {
+                    Some(card) => notice_closed = draw_card(view, card, ui, rect, &theme),
+                    None => draw_notice(view, ui, rect, &theme),
+                },
                 None => draw_pill(badges, battery, ui, rect, &theme),
             },
             |ui, cctx| match page {
@@ -1619,6 +1779,11 @@ impl eframe::App for NookApp {
         );
 
         self.notice_hover = out.pointer_over && notice.is_some();
+        if notice_closed {
+            self.notices.take();
+            self.notice_hover = false;
+            ctx.request_repaint();
+        }
         if out.pill_clicked
             && let Some(toast) = self.notices.take()
         {
