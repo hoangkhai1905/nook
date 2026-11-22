@@ -4,7 +4,9 @@
 use crate::geometry::Squircle;
 use crate::theme::{FAMILY_ICON_FILL, FAMILY_ICON_REGULAR, Theme, with_alpha};
 use egui::epaint::{Mesh, PathShape, PathStroke};
-use egui::{Align2, Color32, Context, FontFamily, FontId, Painter, Pos2, Shape, Stroke, vec2};
+use egui::{
+    Align2, Color32, Context, FontFamily, FontId, Painter, Pos2, Shape, Stroke, pos2, vec2,
+};
 
 /// Advance of each char of `text`, with every digit widened to the widest
 /// digit 0-9 so a ticking number never shifts. Google Sans Flex has
