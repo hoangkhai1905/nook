@@ -8,4 +8,5 @@ license.workspace = true
 [dependencies]
 egui.workspace = true
 egui-phosphor.workspace = true
+material-colors = "0.5.0"
 serde.workspace = true

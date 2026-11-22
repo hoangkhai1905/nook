@@ -1,6 +1,6 @@
 //! Settings: the gear tile in the bento grid and the in-notch settings page.
 
-use crate::config::{AccentSource, Config, GrainSize, Material, MonitorMode, Renderer};
+use crate::config::{AccentSource, Config, Material, MonitorMode, Renderer};
 use crate::update::{self, Status};
 use egui::{
     Align, Align2, Area, Color32, Id, Layout, Order, Rect, Sense, Stroke, Ui, UiBuilder, pos2, vec2,
@@ -25,7 +25,7 @@ const TOP_CARD: f32 = 154.0 + ROW;
 /// Height of a collapsible card's clickable header.
 const DISCLOSURE: f32 = 44.0;
 /// Revealed height of each collapsible section's body.
-const BODY: [f32; 2] = [4.0 * ROW + 14.0, 4.0 * ROW + 28.0];
+const BODY: [f32; 2] = [3.0 * ROW + 14.0, 4.0 * ROW + 28.0];
 /// Page height with every section collapsed, panel padding included.
 const BASE: f32 =
     2.0 * PANEL_PADDING + HEADER + GAP + TOP_CARD + GAP + DISCLOSURE + GAP + DISCLOSURE;
@@ -62,17 +62,6 @@ fn reveal(ctx: &egui::Context, section: usize, open: bool) -> f32 {
     )
     .max(0.0)
 }
-
-/// Background tints offered in the Style card; `None` is neutral glass.
-const BACKGROUNDS: [Option<Color32>; 7] = [
-    None,
-    Some(Color32::from_rgb(0x4A, 0x6F, 0xA5)),
-    Some(Color32::from_rgb(0x2A, 0x9D, 0x8F)),
-    Some(Color32::from_rgb(0x4F, 0x7D, 0x4A)),
-    Some(Color32::from_rgb(0xD0, 0x8C, 0x3C)),
-    Some(Color32::from_rgb(0xC8, 0x56, 0x6E)),
-    Some(Color32::from_rgb(0x8A, 0x5C, 0xC2)),
-];
 
 /// Accent colors for the "Custom" accent.
 const ACCENTS: [Option<Color32>; 7] = [
@@ -424,21 +413,10 @@ fn update_header(ui: &mut Ui, header: Rect, theme: &Theme, status: &Status, out:
 
 /// One line beside the Customize title while it is collapsed.
 fn customize_summary(cfg: &Config) -> String {
-    let material = match cfg.material {
+    match cfg.material {
         Material::Acrylic => format!("Glass {}%", cfg.glass_opacity),
         Material::Solid => "Solid".to_owned(),
-    };
-    let tint = if parse_hex(&cfg.background_hex).is_some() {
-        "tinted"
-    } else {
-        "neutral"
-    };
-    let grain = if cfg.grain == 0 {
-        "no grain".to_owned()
-    } else {
-        format!("grain {}%", cfg.grain)
-    };
-    format!("{material} · {tint} · {grain}")
+    }
 }
 
 fn advanced_summary(cfg: &Config) -> String {
@@ -450,8 +428,7 @@ fn advanced_summary(cfg: &Config) -> String {
     )
 }
 
-/// Material, background tint, glass opacity, accent color and film grain,
-/// in two columns.
+/// Material, glass opacity and accent color, with the reset on the right.
 fn customize_body(ui: &mut Ui, rect: Rect, theme: &Theme, cfg: &mut Config, out: &mut PageOutput) {
     let inner = rect.shrink2(vec2(14.0, 6.0));
     let gap = 20.0;
@@ -478,17 +455,6 @@ fn customize_body(ui: &mut Ui, rect: Rect, theme: &Theme, cfg: &mut Config, out:
         widgets::segmented(ui, &["Glass", "Solid"], &mut mat_idx, theme)
     }) {
         cfg.material = [Material::Acrylic, Material::Solid][mat_idx];
-        out.changed = true;
-    }
-    let mut bg_idx = match parse_hex(&cfg.background_hex) {
-        None => Some(0),
-        Some(c) => BACKGROUNDS.iter().position(|b| *b == Some(c)),
-    };
-    if row(&mut lui, "Background", theme, |ui| {
-        widgets::swatches(ui, &BACKGROUNDS, &mut bg_idx, theme)
-    }) && let Some(i) = bg_idx
-    {
-        cfg.background_hex = BACKGROUNDS[i].map(to_hex).unwrap_or_default();
         out.changed = true;
     }
     let glass = cfg.material == Material::Acrylic;
@@ -526,33 +492,6 @@ fn customize_body(ui: &mut Ui, rect: Rect, theme: &Theme, cfg: &mut Config, out:
     }
 
     let mut rui = column(ui, right);
-    let mut grain = cfg.grain.min(100) as f32 / 100.0;
-    if row(&mut rui, "Grain", theme, |ui| {
-        let resp = widgets::slider(ui, &mut grain, 110.0, 20, theme);
-        let text = if cfg.grain == 0 {
-            "Off".to_owned()
-        } else {
-            format!("{}%", cfg.grain)
-        };
-        value_label(ui, &text, theme);
-        resp
-    }) {
-        cfg.grain = (grain * 100.0).round() as u8;
-        out.changed = true;
-    }
-    let mut size_idx = GrainSize::ALL
-        .iter()
-        .position(|&s| s == cfg.grain_size)
-        .unwrap_or(0);
-    if row(&mut rui, "Grain size", theme, |ui| {
-        if cfg.grain == 0 {
-            ui.disable();
-        }
-        widgets::segmented(ui, &["Fine", "Medium", "Coarse"], &mut size_idx, theme)
-    }) {
-        cfg.grain_size = GrainSize::ALL[size_idx];
-        out.changed = true;
-    }
     let w = rui.available_width();
     let (reset_row, _) = rui.allocate_exact_size(vec2(w, ROW), Sense::hover());
     let reset = Rect::from_min_size(

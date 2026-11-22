@@ -128,6 +128,8 @@ pub struct NookApp {
     system_accent: Option<Color32>,
     material: Applied,
     material_key: Option<(bool, bool, Material)>,
+    /// Cross-fades the palette when the seed or light/dark changes.
+    palette: theme::Fade,
     /// Created lazily the first time the glass material is wanted.
     backdrop: Option<Backdrop>,
     backdrop_failed: bool,
@@ -316,6 +318,7 @@ impl NookApp {
                 .map(|[r, g, b]| Color32::from_rgb(r, g, b)),
             material: Applied::Opaque,
             material_key: None,
+            palette: Default::default(),
             backdrop: None,
             backdrop_failed: false,
             hit,
@@ -562,7 +565,7 @@ impl NookApp {
         }
         self.material_key = Some(key);
         material::prepare(self.hwnd, dark);
-        // The backdrop window also paints the glass tint, so it is used for
+        // The backdrop window also paints the surface fill, so it is used for
         // both materials; "Solid" only turns its blur layer off.
         if self.backdrop.is_none() && !self.backdrop_failed {
             match Backdrop::new(self.hwnd) {
@@ -599,7 +602,7 @@ impl NookApp {
         true
     }
 
-    /// Pushes this frame's glass tint to the compositor.
+    /// Pushes this frame's surface fill to the compositor.
     fn update_tint(&mut self, ctx: &egui::Context, theme: &Theme, out: &ShellOutput, due: bool) {
         if !due {
             return;
@@ -611,19 +614,12 @@ impl NookApp {
         let (top, bottom) = theme.glass_at(out.progress);
         let unmult = |c: Color32| theme::with_alpha(c, out.opacity).to_srgba_unmultiplied();
         let rect = out.shape.rect;
-        let r = out.shape.radius;
         let tint = Tint {
             top: unmult(top),
             bottom: unmult(bottom),
             y0: rect.min.y * ppp,
             y1: rect.max.y * ppp,
             blur: self.material == Applied::Acrylic,
-            rim: unmult(theme.rim_at(out.progress)),
-            rim_width: 2.0 * ppp,
-            highlight: unmult(theme.highlight_at(out.progress)),
-            highlight_x0: (rect.min.x + r) * ppp,
-            highlight_x1: (rect.max.x - r) * ppp,
-            highlight_y: (rect.min.y + 1.0) * ppp,
         };
         if let Err(e) = b.set_tint(tint) {
             tracing::warn!("backdrop tint: {e}");
@@ -1469,12 +1465,11 @@ impl eframe::App for NookApp {
         #[cfg(feature = "debug-overlay")]
         self.overlay.begin();
         let ctx = ui.ctx().clone();
-        let theme = Theme::styled(
-            self.dark(),
-            self.accent(),
-            self.material.translucent(),
-            &self.cfg.look(),
-        );
+        let dark = self.dark();
+        let roles = self
+            .palette
+            .roles(&ctx, self.accent(), dark, Self::now(&ctx));
+        let theme = Theme::from_roles(dark, roles, self.material.translucent(), &self.cfg.look());
         let fullscreen_hidden = self.cfg.hide_in_fullscreen && self.sys.fullscreen;
         let badges: Vec<Badge> = self
             .registry

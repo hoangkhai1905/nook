@@ -3,7 +3,7 @@
 use anyhow::{Context, Result};
 use nook_ui::module::TileSize;
 use nook_ui::shell::Placement;
-use nook_ui::theme::{Look, ThemeMode, parse_hex};
+use nook_ui::theme::{Look, ThemeMode};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -50,28 +50,6 @@ pub enum Renderer {
     OpenGl,
 }
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum GrainSize {
-    /// One physical pixel per speck.
-    #[default]
-    Fine,
-    Medium,
-    Coarse,
-}
-
-impl GrainSize {
-    pub const ALL: [GrainSize; 3] = [GrainSize::Fine, GrainSize::Medium, GrainSize::Coarse];
-
-    pub fn pixels(self) -> f32 {
-        match self {
-            GrainSize::Fine => 1.0,
-            GrainSize::Medium => 2.0,
-            GrainSize::Coarse => 3.0,
-        }
-    }
-}
-
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct ModulesConfig {
@@ -93,11 +71,6 @@ pub struct Config {
     pub material: Material,
     /// Glass opacity over the blurred backdrop, in percent (Glass material).
     pub glass_opacity: u8,
-    /// `#RRGGBB` the panel background is tinted toward; empty for neutral.
-    pub background_hex: String,
-    /// Film-grain strength in percent; 0 turns the grain off.
-    pub grain: u8,
-    pub grain_size: GrainSize,
     /// Top-left corner, top center or top-right corner.
     pub placement: Placement,
     /// Above all windows (true) or behind them.
@@ -152,9 +125,6 @@ impl Default for Config {
             monitor: MonitorMode::Primary,
             material: Material::Acrylic,
             glass_opacity: DEFAULT_GLASS_OPACITY,
-            background_hex: String::new(),
-            grain: DEFAULT_GRAIN,
-            grain_size: GrainSize::Fine,
             placement: Placement::Center,
             on_top: true,
             hide_in_fullscreen: false,
@@ -182,17 +152,13 @@ impl Default for Config {
     }
 }
 
-pub const DEFAULT_GLASS_OPACITY: u8 = 70;
-pub const DEFAULT_GRAIN: u8 = 35;
+pub const DEFAULT_GLASS_OPACITY: u8 = 85;
 
 impl Config {
     /// The styling settings as the theme takes them.
     pub fn look(&self) -> Look {
         Look {
             glass_opacity: self.glass_opacity.clamp(20, 100) as f32 / 100.0,
-            tint: parse_hex(&self.background_hex),
-            grain: self.grain.min(100) as f32 / 100.0,
-            grain_px: self.grain_size.pixels(),
         }
     }
 
@@ -201,9 +167,6 @@ impl Config {
     pub fn reset_look(&mut self) {
         let d = Config::default();
         self.glass_opacity = d.glass_opacity;
-        self.background_hex = d.background_hex;
-        self.grain = d.grain;
-        self.grain_size = d.grain_size;
     }
 }
 
@@ -360,18 +323,26 @@ mod tests {
 
     #[test]
     fn look_settings_parse_and_map() {
-        let text =
-            "grain = 0\ngrain_size = \"coarse\"\nbackground_hex = \"#336699\"\nglass_opacity = 5";
+        let cfg: Config = toml::from_str("glass_opacity = 5").expect("parse");
+        // Clamped so the surface never disappears entirely.
+        assert_eq!(cfg.look().glass_opacity, 0.2);
+        assert_eq!(Config::default().glass_opacity, 85);
+    }
+
+    #[test]
+    fn removed_look_keys_are_ignored() {
+        let text = "theme = \"dark\"
+grain = 35
+grain_size = \"fine\"
+background_hex = \"\"
+glass_opacity = 60";
         let cfg: Config = toml::from_str(text).expect("parse");
-        let look = cfg.look();
-        assert_eq!(look.grain, 0.0);
-        assert_eq!(look.grain_px, 3.0);
-        assert!(look.tint.is_some());
-        // Clamped so the glass never disappears entirely.
-        assert_eq!(look.glass_opacity, 0.2);
-        let old: Config = toml::from_str("theme = \"dark\"").expect("parse");
-        assert_eq!(old.grain, DEFAULT_GRAIN);
-        assert_eq!(old.look().tint, None);
+        assert_eq!(cfg.theme, ThemeMode::Dark);
+        assert_eq!(cfg.glass_opacity, 60);
+        let (cfg, dropped) = lenient(text);
+        assert_eq!(cfg.theme, ThemeMode::Dark);
+        assert_eq!(cfg.glass_opacity, 60);
+        assert!(dropped.is_empty());
     }
 
     #[test]
@@ -425,11 +396,9 @@ notes = \"huge??\"
     fn wrong_type_resets_only_that_field() {
         let (cfg, dropped) = lenient(
             "glass_opacity = 300
-grain = 10
 hover_delay_ms = 1.5",
         );
         assert_eq!(cfg.glass_opacity, DEFAULT_GLASS_OPACITY);
-        assert_eq!(cfg.grain, 10);
         assert_eq!(cfg.hover_delay_ms, 120);
         assert_eq!(dropped.len(), 2);
     }
