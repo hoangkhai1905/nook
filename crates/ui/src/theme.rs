@@ -1,6 +1,10 @@
-//! Design tokens for the "liquid glass bento" language, plus font setup.
+//! Design tokens (Material 3 tonal palette), plus font setup.
 
 use egui::{Color32, FontData, FontDefinitions, FontFamily, FontId};
+use material_colors::color::Rgb;
+use material_colors::hct::Hct;
+use material_colors::scheme::Scheme;
+use material_colors::scheme::variant::SchemeTonalSpot;
 use serde::{Deserialize, Serialize};
 
 /// Fallback accent when no wallpaper color is available: electric violet.
@@ -32,47 +36,146 @@ pub enum ThemeMode {
 /// User styling on top of the built-in palette (see the settings page).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Look {
-    /// Opacity of the glass over the blurred backdrop, 0..1.
+    /// Opacity of the surface over the blurred backdrop, 0..1.
     pub glass_opacity: f32,
-    /// Color the glass is tinted toward; `None` keeps the neutral glass.
-    pub tint: Option<Color32>,
-    /// Film-grain strength, 0..1.
-    pub grain: f32,
-    /// Size of one grain speck in physical pixels.
-    pub grain_px: f32,
 }
 
 impl Default for Look {
     fn default() -> Self {
         Self {
-            glass_opacity: 0.70,
-            tint: None,
-            grain: 0.35,
-            grain_px: 1.0,
+            glass_opacity: 0.85,
         }
     }
 }
 
-/// Grain alpha at full strength. The grain is two-sided (light and dark
-/// specks), so it reads at a lower alpha than a white-only one would.
-const GRAIN_MAX_DARK: f32 = 22.0;
-const GRAIN_MAX_LIGHT: f32 = 16.0;
+/// The Material 3 color roles Nook uses, from a tonal-spot scheme.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Roles {
+    pub primary: Color32,
+    pub on_primary: Color32,
+    pub primary_container: Color32,
+    pub on_primary_container: Color32,
+    pub secondary_container: Color32,
+    pub on_secondary_container: Color32,
+    pub surface: Color32,
+    pub surface_container_low: Color32,
+    pub surface_container: Color32,
+    pub surface_container_high: Color32,
+    pub surface_container_highest: Color32,
+    pub on_surface: Color32,
+    pub on_surface_variant: Color32,
+    pub outline: Color32,
+    pub outline_variant: Color32,
+    pub error: Color32,
+}
+
+impl Roles {
+    /// Tonal-spot scheme (light or dark) generated from `seed`.
+    pub fn from_seed(seed: Color32, dark: bool) -> Self {
+        let hct: Hct = Rgb::new(seed.r(), seed.g(), seed.b()).into();
+        let s = Scheme::from(SchemeTonalSpot::new(hct, dark, None).scheme);
+        let c = |c: Rgb| Color32::from_rgb(c.red, c.green, c.blue);
+        Self {
+            primary: c(s.primary),
+            on_primary: c(s.on_primary),
+            primary_container: c(s.primary_container),
+            on_primary_container: c(s.on_primary_container),
+            secondary_container: c(s.secondary_container),
+            on_secondary_container: c(s.on_secondary_container),
+            surface: c(s.surface),
+            surface_container_low: c(s.surface_container_low),
+            surface_container: c(s.surface_container),
+            surface_container_high: c(s.surface_container_high),
+            surface_container_highest: c(s.surface_container_highest),
+            on_surface: c(s.on_surface),
+            on_surface_variant: c(s.on_surface_variant),
+            outline: c(s.outline),
+            outline_variant: c(s.outline_variant),
+            error: c(s.error),
+        }
+    }
+
+    /// Role-by-role [`mix`]; `t = 0` is `a`.
+    pub fn mix(a: &Self, b: &Self, t: f32) -> Self {
+        let m = |x: Color32, y: Color32| mix(x, y, t);
+        Self {
+            primary: m(a.primary, b.primary),
+            on_primary: m(a.on_primary, b.on_primary),
+            primary_container: m(a.primary_container, b.primary_container),
+            on_primary_container: m(a.on_primary_container, b.on_primary_container),
+            secondary_container: m(a.secondary_container, b.secondary_container),
+            on_secondary_container: m(a.on_secondary_container, b.on_secondary_container),
+            surface: m(a.surface, b.surface),
+            surface_container_low: m(a.surface_container_low, b.surface_container_low),
+            surface_container: m(a.surface_container, b.surface_container),
+            surface_container_high: m(a.surface_container_high, b.surface_container_high),
+            surface_container_highest: m(a.surface_container_highest, b.surface_container_highest),
+            on_surface: m(a.on_surface, b.on_surface),
+            on_surface_variant: m(a.on_surface_variant, b.on_surface_variant),
+            outline: m(a.outline, b.outline),
+            outline_variant: m(a.outline_variant, b.outline_variant),
+            error: m(a.error, b.error),
+        }
+    }
+}
+
+/// How long a palette change takes to cross-fade.
+const FADE_SECS: f64 = 0.3;
+
+/// Cross-fades [`Roles`] when the seed or the light/dark mode changes.
+/// Asks for repaints only while a fade runs, so an idle shell stays idle.
+pub struct Fade {
+    key: Option<(Color32, bool)>,
+    from: Roles,
+    to: Roles,
+    start: f64,
+}
+
+impl Default for Fade {
+    fn default() -> Self {
+        let r = Roles::from_seed(FALLBACK_ACCENT, true);
+        Self {
+            key: None,
+            from: r,
+            to: r,
+            start: f64::NEG_INFINITY,
+        }
+    }
+}
+
+impl Fade {
+    /// The roles to draw with at `now` (seconds).
+    pub fn roles(&mut self, ctx: &egui::Context, seed: Color32, dark: bool, now: f64) -> Roles {
+        if self.key != Some((seed, dark)) {
+            let first = self.key.is_none();
+            let shown = self.at(now);
+            self.key = Some((seed, dark));
+            self.to = Roles::from_seed(seed, dark);
+            self.from = if first { self.to } else { shown };
+            self.start = now;
+        }
+        if now - self.start < FADE_SECS {
+            ctx.request_repaint();
+        }
+        self.at(now)
+    }
+
+    fn at(&self, now: f64) -> Roles {
+        let t = ((now - self.start) / FADE_SECS).clamp(0.0, 1.0) as f32;
+        Roles::mix(&self.from, &self.to, t)
+    }
+}
 
 /// Resolved colors for one frame.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Theme {
     pub dark: bool,
+    pub roles: Roles,
+    /// Primary.
     pub accent: Color32,
-    /// Glass fill, top and bottom of the vertical gradient.
+    /// Surface fill of the shell (top and bottom match: it is flat).
     pub glass_top: Color32,
     pub glass_bottom: Color32,
-    /// 1 px rim around the shell (stands in for the outer shadow, see NOTES).
-    pub rim: Color32,
-    /// 1 px inner highlight along the top edge.
-    pub highlight: Color32,
-    pub noise_alpha: u8,
-    /// Physical pixels per grain speck.
-    pub grain_px: f32,
     pub tile_top: Color32,
     pub tile_bottom: Color32,
     pub tile_rim: Color32,
@@ -80,90 +183,55 @@ pub struct Theme {
     pub text_dim: Color32,
     pub text_faint: Color32,
     /// The collapsed pill is always "ink" (a hardware-notch black), whatever
-    /// the theme; it blends into the theme's glass as the shell opens.
+    /// the theme; it blends into the surface as the shell opens.
     pub pill_top: Color32,
     pub pill_bottom: Color32,
-    pub pill_rim: Color32,
-    pub pill_highlight: Color32,
     pub pill_text: Color32,
     pub pill_text_dim: Color32,
 }
 
 impl Theme {
     /// `translucent` is true when a blurred backdrop (acrylic) sits behind
-    /// the window; otherwise the glass is drawn nearly opaque.
-    pub fn new(dark: bool, accent: Color32, translucent: bool) -> Self {
-        Self::styled(dark, accent, translucent, &Look::default())
+    /// the window; otherwise the surface is drawn opaque.
+    pub fn new(dark: bool, seed: Color32, translucent: bool) -> Self {
+        Self::styled(dark, seed, translucent, &Look::default())
     }
 
     /// [`Theme::new`] with the user's [`Look`] applied.
-    pub fn styled(dark: bool, accent: Color32, translucent: bool, look: &Look) -> Self {
-        let glass_alpha = if translucent {
+    pub fn styled(dark: bool, seed: Color32, translucent: bool, look: &Look) -> Self {
+        Self::from_roles(dark, Roles::from_seed(seed, dark), translucent, look)
+    }
+
+    /// Builds the theme from already generated (or mid-fade) roles.
+    pub fn from_roles(dark: bool, roles: Roles, translucent: bool, look: &Look) -> Self {
+        let alpha = if translucent {
             look.glass_opacity.clamp(0.2, 1.0)
         } else {
-            0.96
+            1.0
         };
-        let grain = look.grain.clamp(0.0, 1.0);
-        let grain_px = look.grain_px.clamp(1.0, 4.0);
-        // The tint keeps the theme's lightness: a dark theme gets a deep
-        // shade of the color, a light theme a pale one, so text stays legible.
-        let tinted = |base: Color32, amount: f32| match look.tint {
-            Some(t) => mix(base, t, amount),
-            None => base,
-        };
+        let surface = with_alpha(roles.surface, alpha);
         let ink_alpha = if translucent { 0.90 } else { 1.0 };
-        let ink = Ink {
+        Self {
+            dark,
+            roles,
+            accent: roles.primary,
+            glass_top: surface,
+            glass_bottom: surface,
+            tile_top: roles.surface_container,
+            tile_bottom: roles.surface_container,
+            tile_rim: Color32::TRANSPARENT,
+            text: roles.on_surface,
+            text_dim: roles.on_surface_variant,
+            text_faint: roles.outline,
             pill_top: with_alpha(Color32::from_rgb(24, 24, 28), ink_alpha),
             pill_bottom: with_alpha(Color32::from_rgb(6, 6, 8), ink_alpha),
-            pill_rim: Color32::from_rgba_unmultiplied(255, 255, 255, 22),
-            pill_highlight: Color32::from_rgba_unmultiplied(255, 255, 255, 34),
             pill_text: Color32::from_rgb(244, 244, 246),
             pill_text_dim: Color32::from_rgb(150, 150, 160),
-        };
-        if dark {
-            Self {
-                dark,
-                accent,
-                glass_top: with_alpha(tinted(Color32::from_rgb(34, 34, 40), 0.30), glass_alpha),
-                glass_bottom: with_alpha(tinted(Color32::from_rgb(18, 18, 22), 0.20), glass_alpha),
-                rim: Color32::from_rgba_unmultiplied(0, 0, 0, 110),
-                highlight: Color32::from_rgba_unmultiplied(255, 255, 255, 46),
-                noise_alpha: (grain * GRAIN_MAX_DARK).round() as u8,
-                grain_px,
-                tile_top: Color32::from_rgba_unmultiplied(255, 255, 255, 18),
-                tile_bottom: Color32::from_rgba_unmultiplied(255, 255, 255, 8),
-                tile_rim: Color32::from_rgba_unmultiplied(255, 255, 255, 14),
-                text: Color32::from_rgb(242, 242, 245),
-                text_dim: Color32::from_rgb(168, 168, 178),
-                text_faint: Color32::from_rgb(110, 110, 120),
-                ..ink.into_theme()
-            }
-        } else {
-            Self {
-                dark,
-                accent,
-                glass_top: with_alpha(tinted(Color32::from_rgb(252, 252, 253), 0.14), glass_alpha),
-                glass_bottom: with_alpha(
-                    tinted(Color32::from_rgb(236, 236, 240), 0.20),
-                    glass_alpha,
-                ),
-                rim: Color32::from_rgba_unmultiplied(0, 0, 0, 40),
-                highlight: Color32::from_rgba_unmultiplied(255, 255, 255, 200),
-                noise_alpha: (grain * GRAIN_MAX_LIGHT).round() as u8,
-                grain_px,
-                tile_top: Color32::from_rgba_unmultiplied(255, 255, 255, 150),
-                tile_bottom: Color32::from_rgba_unmultiplied(255, 255, 255, 90),
-                tile_rim: Color32::from_rgba_unmultiplied(0, 0, 0, 14),
-                text: Color32::from_rgb(24, 24, 28),
-                text_dim: Color32::from_rgb(92, 92, 104),
-                text_faint: Color32::from_rgb(150, 150, 160),
-                ..ink.into_theme()
-            }
         }
     }
 
-    /// Glass fill (top, bottom) at shell `progress`: ink pill at 0, theme
-    /// glass from ~70% open.
+    /// Surface fill (top, bottom) at shell `progress`: ink pill at 0, the
+    /// surface from ~70% open.
     pub fn glass_at(&self, progress: f32) -> (Color32, Color32) {
         let t = blend(progress);
         (
@@ -172,28 +240,14 @@ impl Theme {
         )
     }
 
-    pub fn rim_at(&self, progress: f32) -> Color32 {
-        mix(self.pill_rim, self.rim, blend(progress))
-    }
-
-    pub fn highlight_at(&self, progress: f32) -> Color32 {
-        mix(self.pill_highlight, self.highlight, blend(progress))
-    }
-
-    /// Accent-tinted gradient for active tiles.
+    /// Fill for active tiles: the primary container.
     pub fn active_tile(&self) -> (Color32, Color32) {
-        let a = if self.dark { 0.42 } else { 0.30 };
-        let b = if self.dark { 0.20 } else { 0.14 };
-        (with_alpha(self.accent, a), with_alpha(self.accent, b))
+        (self.roles.primary_container, self.roles.primary_container)
     }
 
-    /// Accent readable as text/icon color on the current glass.
+    /// Accent readable as text/icon color on the surface.
     pub fn accent_fg(&self) -> Color32 {
-        if self.dark {
-            mix(self.accent, Color32::WHITE, 0.25)
-        } else {
-            mix(self.accent, Color32::BLACK, 0.15)
-        }
+        self.roles.primary
     }
 
     pub fn font(size: f32) -> FontId {
@@ -210,45 +264,6 @@ impl Theme {
 fn blend(progress: f32) -> f32 {
     let t = (progress / 0.7).clamp(0.0, 1.0);
     t * t * (3.0 - 2.0 * t)
-}
-
-/// The theme-independent pill colors.
-struct Ink {
-    pill_top: Color32,
-    pill_bottom: Color32,
-    pill_rim: Color32,
-    pill_highlight: Color32,
-    pill_text: Color32,
-    pill_text_dim: Color32,
-}
-
-impl Ink {
-    /// A `Theme` carrying only the ink fields, for struct-update syntax.
-    fn into_theme(self) -> Theme {
-        let z = Color32::TRANSPARENT;
-        Theme {
-            dark: true,
-            accent: z,
-            glass_top: z,
-            glass_bottom: z,
-            rim: z,
-            highlight: z,
-            noise_alpha: 0,
-            grain_px: 1.0,
-            tile_top: z,
-            tile_bottom: z,
-            tile_rim: z,
-            text: z,
-            text_dim: z,
-            text_faint: z,
-            pill_top: self.pill_top,
-            pill_bottom: self.pill_bottom,
-            pill_rim: self.pill_rim,
-            pill_highlight: self.pill_highlight,
-            pill_text: self.pill_text,
-            pill_text_dim: self.pill_text_dim,
-        }
-    }
 }
 
 /// Multiplies a color's alpha (unmultiplied semantics).
@@ -332,24 +347,68 @@ mod tests {
         assert_eq!(mix(Color32::BLACK, Color32::WHITE, 1.0), Color32::WHITE);
     }
 
+    fn luminance(c: Color32) -> f64 {
+        let l = |v: u8| {
+            let v = v as f64 / 255.0;
+            if v <= 0.04045 {
+                v / 12.92
+            } else {
+                ((v + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        0.2126 * l(c.r()) + 0.7152 * l(c.g()) + 0.0722 * l(c.b())
+    }
+
+    fn contrast(a: Color32, b: Color32) -> f64 {
+        let (x, y) = (luminance(a), luminance(b));
+        (x.max(y) + 0.05) / (x.min(y) + 0.05)
+    }
+
     #[test]
-    fn look_controls_grain_and_glass() {
-        let off = Look {
-            grain: 0.0,
-            ..Look::default()
-        };
-        assert_eq!(
-            Theme::styled(true, FALLBACK_ACCENT, true, &off).noise_alpha,
-            0
-        );
-        let clear = Look {
-            glass_opacity: 0.5,
-            ..Look::default()
-        };
+    fn seed_gives_distinct_light_and_dark_schemes() {
+        let dark = Roles::from_seed(FALLBACK_ACCENT, true);
+        let light = Roles::from_seed(FALLBACK_ACCENT, false);
+        assert_ne!(dark, light);
+        assert!(luminance(dark.surface) < luminance(light.surface));
+    }
+
+    #[test]
+    fn on_surface_is_legible_on_surface() {
+        for seed in [
+            FALLBACK_ACCENT,
+            Color32::from_rgb(230, 190, 40),
+            Color32::WHITE,
+        ] {
+            for dark in [true, false] {
+                let r = Roles::from_seed(seed, dark);
+                assert!(contrast(r.on_surface, r.surface) >= 4.5);
+            }
+        }
+    }
+
+    #[test]
+    fn look_controls_opacity() {
+        let clear = Look { glass_opacity: 0.5 };
         let t = Theme::styled(true, FALLBACK_ACCENT, true, &clear);
         assert_eq!(t.glass_top.to_srgba_unmultiplied()[3], 128);
+        assert_eq!(t.glass_top, t.glass_bottom);
         // The solid material ignores the opacity setting.
         let t = Theme::styled(true, FALLBACK_ACCENT, false, &clear);
-        assert_eq!(t.glass_top.to_srgba_unmultiplied()[3], 245);
+        assert_eq!(t.glass_top.to_srgba_unmultiplied()[3], 255);
+        assert_eq!(Look::default().glass_opacity, 0.85);
+    }
+
+    #[test]
+    fn fade_runs_300ms_then_settles() {
+        let ctx = egui::Context::default();
+        let mut f = Fade::default();
+        let first = f.roles(&ctx, FALLBACK_ACCENT, true, 10.0);
+        assert_eq!(first, Roles::from_seed(FALLBACK_ACCENT, true));
+        let target = Roles::from_seed(FALLBACK_ACCENT, false);
+        assert_eq!(f.roles(&ctx, FALLBACK_ACCENT, false, 10.0), first);
+        let mid = f.roles(&ctx, FALLBACK_ACCENT, false, 10.15);
+        assert_ne!(mid, first);
+        assert_ne!(mid, target);
+        assert_eq!(f.roles(&ctx, FALLBACK_ACCENT, false, 10.31), target);
     }
 }

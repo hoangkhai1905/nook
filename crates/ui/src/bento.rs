@@ -121,7 +121,7 @@ fn is_compact(tile: &GridTile<'_>) -> bool {
     tile.module.status() == ModuleStatus::Ready && tile.size.area() < tile.module.size_hint().area()
 }
 
-/// Glass tile background: gradient, rim and highlight, with hover glow.
+/// Tile background: flat surface container fill, with hover glow.
 fn tile_glass(painter: &egui::Painter, rect: Rect, theme: &Theme, active: bool, lift: f32) {
     let shape = Squircle::new(rect, TILE_RADIUS);
     let outline = shape.outline();
@@ -140,7 +140,6 @@ fn tile_glass(painter: &egui::Painter, rect: Rect, theme: &Theme, active: bool, 
         outline,
         egui::epaint::PathStroke::new(1.0, theme.tile_rim),
     ));
-    paint::top_highlight(painter, &shape, with_alpha(theme.highlight, 0.5));
 }
 
 fn tile_inner(rect: Rect, size: TileSize) -> Rect {

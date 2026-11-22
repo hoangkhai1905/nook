@@ -1,12 +1,11 @@
 //! Shape-clipped acrylic backdrop via Windows.UI.Composition.
 //!
-//! A `DesktopWindowTarget` hosts a container with three layers: a sprite
+//! A `DesktopWindowTarget` hosts a container with two layers: a sprite
 //! painted with the host backdrop brush (the blurred desktop behind the
-//! window, the same source acrylic uses), a sprite with the glass tint (a
-//! vertical gradient), and a shape visual with the 1 px rim and the top
-//! highlight. One Direct2D path clip on the container cuts all of them to
-//! the shell outline, so everything that defines the *edge* lives in one
-//! compositor commit.
+//! window, the same source acrylic uses) and a sprite with the surface
+//! color (a vertical gradient, flat when top and bottom match). One
+//! Direct2D path clip on the container cuts both to the shell outline, so
+//! everything that defines the *edge* lives in one compositor commit.
 //!
 //! OpenGL (the main window) and Composition present on separate paths that
 //! cannot be synchronized; whenever an edge element was drawn in GL it ran a
@@ -38,9 +37,8 @@ use windows::System::{DispatcherQueue, DispatcherQueueController};
 use windows::UI::Color;
 use windows::UI::Composition::Desktop::DesktopWindowTarget;
 use windows::UI::Composition::{
-    CompositionColorBrush, CompositionColorGradientStop, CompositionLineGeometry,
-    CompositionLinearGradientBrush, CompositionMappingMode, CompositionPath,
-    CompositionSpriteShape, Compositor, ContainerVisual, SpriteVisual,
+    CompositionColorGradientStop, CompositionLinearGradientBrush, CompositionMappingMode,
+    CompositionPath, Compositor, ContainerVisual, SpriteVisual,
 };
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::Graphics::Direct2D::Common::{
@@ -145,15 +143,6 @@ pub struct Tint {
     pub y1: f32,
     /// Show the blur layer under the tint (off for the "Solid" material).
     pub blur: bool,
-    /// Rim stroke along the outline. Half of it falls outside the clip, so
-    /// pass twice the visible width.
-    pub rim: [u8; 4],
-    pub rim_width: f32,
-    /// Top highlight line: color at its middle, fading to clear at the ends.
-    pub highlight: [u8; 4],
-    pub highlight_x0: f32,
-    pub highlight_x1: f32,
-    pub highlight_y: f32,
 }
 
 /// Largest per-point move (window px) not worth a new clip.
@@ -184,11 +173,6 @@ pub struct Backdrop {
     blur: SpriteVisual,
     tint: CompositionLinearGradientBrush,
     stops: [CompositionColorGradientStop; 2],
-    rim: CompositionSpriteShape,
-    rim_brush: CompositionColorBrush,
-    highlight_line: CompositionLineGeometry,
-    highlight_brush: CompositionLinearGradientBrush,
-    highlight_stops: [CompositionColorGradientStop; 3],
     last_tint: Option<Tint>,
     /// Polygon last sent to the compositor; unchanged shapes are not re-pushed.
     last_shape: Vec<(f32, f32)>,
@@ -281,56 +265,11 @@ impl Backdrop {
             .SetRelativeSizeAdjustment(full)
             .api("SetRelativeSizeAdjustment")?;
 
-        // Edge decorations: rim along the outline, highlight along the top.
-        let shapes = compositor.CreateShapeVisual().api("CreateShapeVisual")?;
-        shapes
-            .SetRelativeSizeAdjustment(full)
-            .api("SetRelativeSizeAdjustment")?;
-        let rim_brush = compositor
-            .CreateColorBrushWithColor(clear)
-            .api("CreateColorBrush")?;
-        let rim = compositor.CreateSpriteShape().api("CreateSpriteShape")?;
-        rim.SetStrokeBrush(&rim_brush).api("SetStrokeBrush")?;
-        let highlight_brush = compositor
-            .CreateLinearGradientBrush()
-            .api("CreateLinearGradientBrush")?;
-        highlight_brush
-            .SetMappingMode(CompositionMappingMode::Absolute)
-            .api("SetMappingMode")?;
-        let highlight_stops = [
-            compositor
-                .CreateColorGradientStopWithOffsetAndColor(0.0, clear)
-                .api("CreateColorGradientStop")?,
-            compositor
-                .CreateColorGradientStopWithOffsetAndColor(0.5, clear)
-                .api("CreateColorGradientStop")?,
-            compositor
-                .CreateColorGradientStopWithOffsetAndColor(1.0, clear)
-                .api("CreateColorGradientStop")?,
-        ];
-        let hl_collection = highlight_brush.ColorStops().api("ColorStops")?;
-        for stop in &highlight_stops {
-            hl_collection.Append(stop).api("ColorStops::Append")?;
-        }
-        let highlight_line = compositor.CreateLineGeometry().api("CreateLineGeometry")?;
-        let highlight = compositor
-            .CreateSpriteShapeWithGeometry(&highlight_line)
-            .api("CreateSpriteShape")?;
-        highlight
-            .SetStrokeBrush(&highlight_brush)
-            .api("SetStrokeBrush")?;
-        let shape_list = shapes.Shapes().api("Shapes")?;
-        shape_list.Append(&rim).api("Shapes::Append(rim)")?;
-        shape_list
-            .Append(&highlight)
-            .api("Shapes::Append(highlight)")?;
-
         let children = root.Children().api("Children")?;
         children.InsertAtTop(&blur).api("InsertAtTop(blur)")?;
         children
             .InsertAtTop(&tint_visual)
             .api("InsertAtTop(tint)")?;
-        children.InsertAtTop(&shapes).api("InsertAtTop(shapes)")?;
         // Nothing visible until the first shape arrives.
         root.SetIsVisible(false).api("SetIsVisible")?;
         target.SetRoot(&root).api("DesktopWindowTarget::SetRoot")?;
@@ -355,11 +294,6 @@ impl Backdrop {
             blur,
             tint,
             stops,
-            rim,
-            rim_brush,
-            highlight_line,
-            highlight_brush,
-            highlight_stops,
             last_tint: None,
             last_shape: Vec::new(),
             factory,
@@ -453,7 +387,6 @@ impl Backdrop {
             .CreateGeometricClipWithGeometry(&geom)
             .api("CreateGeometricClipWithGeometry")?;
         self.root.SetClip(&clip).api("SetClip")?;
-        self.rim.SetGeometry(&geom).api("SetGeometry(rim)")?;
         self.last_shape = polygon.to_vec();
         self.set_visible(true)
     }
@@ -478,40 +411,6 @@ impl Backdrop {
                 .api("SetIsVisible(blur)")?;
         }
 
-        self.rim_brush
-            .SetColor(color(tint.rim))
-            .api("SetColor(rim)")?;
-        self.rim
-            .SetStrokeThickness(tint.rim_width)
-            .api("SetStrokeThickness")?;
-
-        let [r, g, b, _] = tint.highlight;
-        let clear = color([r, g, b, 0]);
-        self.highlight_stops[0].SetColor(clear).api("SetColor")?;
-        self.highlight_stops[1]
-            .SetColor(color(tint.highlight))
-            .api("SetColor")?;
-        self.highlight_stops[2].SetColor(clear).api("SetColor")?;
-        let (x0, x1, y) = (
-            tint.highlight_x0,
-            tint.highlight_x1.max(tint.highlight_x0),
-            tint.highlight_y,
-        );
-        self.highlight_line
-            .SetStart(Vector2 { X: x0, Y: y })
-            .api("SetStart")?;
-        self.highlight_line
-            .SetEnd(Vector2 { X: x1, Y: y })
-            .api("SetEnd")?;
-        self.highlight_brush
-            .SetStartPoint(Vector2 { X: x0, Y: y })
-            .api("SetStartPoint")?;
-        self.highlight_brush
-            .SetEndPoint(Vector2 {
-                X: x1.max(x0 + 1.0),
-                Y: y,
-            })
-            .api("SetEndPoint")?;
         self.last_tint = Some(tint);
         Ok(())
     }

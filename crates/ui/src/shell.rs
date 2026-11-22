@@ -235,8 +235,8 @@ impl Shell {
     }
 
     /// Runs one frame. `hidden` fades the whole shell out (fullscreen apps).
-    /// `composited` means the compositor paints the glass tint, so only
-    /// grain, rim and highlight are drawn here.
+    /// `composited` means the compositor paints the surface fill, so
+    /// nothing is drawn for it here.
     pub fn show(
         &mut self,
         ui: &mut Ui,
@@ -355,7 +355,6 @@ impl Shell {
         let painter = ui.painter().clone();
         paint::glass(
             &painter,
-            &shape,
             &self.outline,
             theme,
             opacity,
