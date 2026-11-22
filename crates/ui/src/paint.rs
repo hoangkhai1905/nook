@@ -11,6 +11,57 @@ use egui::{
 
 const NOISE_SIZE: usize = 128;
 
+/// Advance of each char of `text`, with every digit widened to the widest
+/// digit 0-9 so a ticking number never shifts. Google Sans Flex has
+/// proportional digits and egui cannot enable `tnum`.
+fn slot_advances(text: &str, mut glyph_w: impl FnMut(char) -> f32) -> Vec<f32> {
+    let slot = ('0'..='9').map(&mut glyph_w).fold(0.0, f32::max);
+    text.chars()
+        .map(|c| if c.is_ascii_digit() { slot } else { glyph_w(c) })
+        .collect()
+}
+
+fn glyph_widths(ctx: &Context, text: &str, font: &FontId) -> (Vec<f32>, f32) {
+    ctx.fonts_mut(|f| {
+        (
+            slot_advances(text, |c| f.glyph_width(font, c)),
+            f.row_height(font),
+        )
+    })
+}
+
+/// Width of `text` as [`digit_slots`] paints it.
+pub fn digit_slots_width(ctx: &Context, text: &str, font: &FontId) -> f32 {
+    glyph_widths(ctx, text, font).0.iter().sum()
+}
+
+/// Paints `text` with each digit centered in a fixed-width slot, anchored
+/// like [`Painter::text`]. Returns the line box.
+pub fn digit_slots(
+    painter: &Painter,
+    text: &str,
+    font: FontId,
+    color: Color32,
+    anchor: Pos2,
+    align: Align2,
+) -> egui::Rect {
+    let (advances, height) = glyph_widths(painter.ctx(), text, &font);
+    let rect = align.anchor_size(anchor, vec2(advances.iter().sum(), height));
+    let mut x = rect.min.x;
+    for (c, adv) in text.chars().zip(advances) {
+        let w = painter.ctx().fonts_mut(|f| f.glyph_width(&font, c));
+        painter.text(
+            pos2(x + (adv - w) / 2.0, rect.min.y),
+            Align2::LEFT_TOP,
+            c,
+            font.clone(),
+            color,
+        );
+        x += adv;
+    }
+    rect
+}
+
 /// Vertical-gradient fill of a convex outline (fan triangulation from the
 /// centroid; colors are linear in y, so the interpolation is exact).
 pub fn fill_gradient(painter: &Painter, outline: &[Pos2], top: Color32, bottom: Color32) {
@@ -251,4 +302,33 @@ pub fn noise_texture(ctx: &Context) -> TextureHandle {
     );
     ctx.data_mut(|d| d.insert_temp(key, tex.clone()));
     tex
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn digit_slots_keep_width_with_the_real_font() {
+        let ctx = Context::default();
+        crate::theme::install_fonts(&ctx);
+        ctx.run_ui(Default::default(), |_| {})
+            .textures_delta
+            .clear();
+        let font = FontId::proportional(14.0);
+        let w = |s| digit_slots_width(&ctx, s, &font);
+        assert!(w("00:00") > 0.0);
+        assert_eq!(w("11:11"), w("00:00"));
+        assert_eq!(w("8:59"), w("1:11"));
+    }
+
+    #[test]
+    fn slots_only_widen_digits() {
+        let adv = slot_advances("1:0", |c| match c {
+            '1' => 3.0,
+            ':' => 2.0,
+            _ => 5.0,
+        });
+        assert_eq!(adv, vec![5.0, 2.0, 5.0]);
+    }
 }

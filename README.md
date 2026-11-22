@@ -483,4 +483,5 @@ drained in `on_tick`.
 ## Contributing and license
 
 See [CONTRIBUTING.md](CONTRIBUTING.md). Nook is released under the
-[MIT license](LICENSE).
+[MIT license](LICENSE). The bundled Google Sans Flex font is under the
+SIL Open Font License ([OFL.txt](crates/ui/assets/fonts/OFL.txt)).

@@ -877,7 +877,7 @@ impl NookApp {
 }
 
 /// Paints `text` so its ink (not its line box) starts at `x`, or ends at `x`
-/// when `from_right`, and is vertically centered on `cy`. Segoe UI's line
+/// when `from_right`, and is vertically centered on `cy`. The font's line
 /// box carries descender space and Phosphor glyphs are narrower than their
 /// em box, so aligning line boxes leaves the pill visibly off-center.
 fn ink_text(
@@ -899,6 +899,29 @@ fn ink_text(
     let offset = vec2(dx, cy - ink.center().y);
     painter.galley(pos2(offset.x, offset.y), galley, color);
     ink.translate(offset)
+}
+
+/// [`ink_text`] for ticking digits: vertically centered on `cy` by ink, each
+/// digit in a fixed-width slot, starting at `x`. Returns the line box.
+fn ink_digits(
+    painter: &egui::Painter,
+    text: &str,
+    font: FontId,
+    color: Color32,
+    x: f32,
+    cy: f32,
+) -> Rect {
+    let ink = painter
+        .layout_no_wrap(text.to_owned(), font.clone(), color)
+        .mesh_bounds;
+    paint::digit_slots(
+        painter,
+        text,
+        font,
+        color,
+        pos2(x, cy - ink.center().y),
+        egui::Align2::LEFT_TOP,
+    )
 }
 
 fn icon_font(size: f32, fill: bool) -> FontId {
@@ -939,27 +962,25 @@ fn draw_pill(badges: Vec<Badge>, battery: Option<Battery>, ui: &mut Ui, rect: Re
                 theme::with_alpha(theme.pill_text_dim, 0.35),
                 theme.accent,
             );
-            ink_text(
+            ink_digits(
                 painter,
                 &label,
                 Theme::font_semibold(SIZE_BODY),
                 theme.pill_text,
                 left + 2.0 * r + 7.0,
                 cy,
-                false,
             )
             .max
             .x
         }
         None => {
-            ink_text(
+            ink_digits(
                 painter,
                 &clock.time,
                 Theme::font_semibold(SIZE_BODY),
                 theme.pill_text,
                 left,
                 cy,
-                false,
             )
             .max
             .x
@@ -1476,6 +1497,8 @@ impl eframe::App for NookApp {
                 .size()
                 .x
         };
+        let digits =
+            |text: &str| paint::digit_slots_width(&ctx, text, &Theme::font_semibold(SIZE_BODY));
         // The pill widens to fit the notification or what's playing; the
         // reveal hot zone follows.
         self.shell.collapsed_width = if let Some(view) = &notice {
@@ -1505,8 +1528,8 @@ impl eframe::App for NookApp {
                     _ => None,
                 }) {
                     // Ring (2r) plus its gap, then the countdown.
-                    Some(label) => 19.0 + measure(label, Theme::font_semibold(SIZE_BODY)),
-                    None => measure(&system::clock().time, Theme::font_semibold(SIZE_BODY)),
+                    Some(label) => 19.0 + digits(label),
+                    None => digits(&system::clock().time),
                 };
                 let title_w = measure(title, Theme::font(SIZE_LABEL + 1.0));
                 media_pill_width(left, title_w, self.shell.metrics.collapsed.x)

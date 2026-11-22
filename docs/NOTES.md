@@ -147,10 +147,12 @@ build 26300, 1920x1080 at 125% scale, AMD GPU.
 ### 9. Fonts and tabular numerals
 - **Problem:** egui cannot enable OpenType features (`tnum`). Inter's
   default figures are proportional, so timer digits would jitter.
-- **Choice:** Nook loads the system's **Segoe UI** (regular and semibold),
-  whose digits are tabular by default, from `%WINDIR%\Fonts` at runtime.
-  Nothing is bundled and there are no licensing concerns.
-- **Fallback:** egui's built-in font if those files are missing.
+- **Choice:** Nook bundles **Google Sans Flex** (SIL OFL 1.1, from
+  google/fonts), a variable font. The same bytes are registered twice with
+  `wght` 400 (regular) and 500 (`FAMILY_SEMIBOLD`). Its digits are
+  proportional, so ticking text (pill clock, timer, stopwatch) is painted
+  with `paint::digit_slots`, which gives every digit the widest digit width.
+- **Fallback:** egui's built-in font for glyphs the font lacks.
 - **Icons:** Phosphor regular and fill via `egui-phosphor` 0.14, which pins
   egui and eframe to **0.36**.
 

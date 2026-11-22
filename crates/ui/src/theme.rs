@@ -283,39 +283,28 @@ pub fn to_hex(c: Color32) -> String {
 
 /// Installs the text and icon fonts.
 ///
-/// Text uses the system's Segoe UI (regular + semibold), whose digits are
-/// tabular by default; egui cannot switch OpenType features such as `tnum`,
-/// which rules out Inter's proportional default figures. If the files are
-/// missing, egui's bundled font is used. See docs/NOTES.md.
+/// Text uses Google Sans Flex (SIL OFL 1.1), a variable font bundled in the
+/// binary. The same bytes are registered twice with different `wght`
+/// coordinates: 400 for regular, 500 for [`FAMILY_SEMIBOLD`]. Its digits are
+/// proportional and egui cannot switch on `tnum`, so ticking text goes
+/// through `paint::digit_slots`. egui's bundled font stays as a fallback.
 pub fn install_fonts(ctx: &egui::Context) {
+    const GSF: &[u8] = include_bytes!("../assets/fonts/GoogleSansFlex.ttf");
     let mut fonts = FontDefinitions::default();
-    let windir = std::env::var("WINDIR").unwrap_or_else(|_| "C:\\Windows".into());
-    let load = |file: &str| std::fs::read(format!("{windir}\\Fonts\\{file}")).ok();
-
-    let regular = load("segoeui.ttf");
-    let semibold = load("seguisb.ttf");
-    if let Some(bytes) = regular {
-        fonts
-            .font_data
-            .insert("segoe".into(), FontData::from_owned(bytes).into());
-        if let Some(list) = fonts.families.get_mut(&FontFamily::Proportional) {
-            list.insert(0, "segoe".into());
-        }
-    }
-    let mut semibold_family = fonts
-        .families
-        .get(&FontFamily::Proportional)
-        .cloned()
-        .unwrap_or_default();
-    if let Some(bytes) = semibold {
-        fonts
-            .font_data
-            .insert("segoe-semibold".into(), FontData::from_owned(bytes).into());
-        semibold_family.insert(0, "segoe-semibold".into());
-    }
+    let weight = |w: f32| {
+        let mut data = FontData::from_static(GSF);
+        data.tweak.coords = egui::epaint::text::VariationCoords::new([(b"wght", w)]);
+        data.into()
+    };
+    fonts.font_data.insert("gsf".into(), weight(400.0));
+    fonts.font_data.insert("gsf-medium".into(), weight(500.0));
+    let proportional = fonts.families.entry(FontFamily::Proportional).or_default();
+    proportional.insert(0, "gsf".into());
+    let mut medium = proportional.clone();
+    medium[0] = "gsf-medium".into();
     fonts
         .families
-        .insert(FontFamily::Name(FAMILY_SEMIBOLD.into()), semibold_family);
+        .insert(FontFamily::Name(FAMILY_SEMIBOLD.into()), medium);
 
     egui_phosphor::add_to_fonts(&mut fonts, egui_phosphor::Variant::Regular);
     egui_phosphor::add_font_bytes_as_family(

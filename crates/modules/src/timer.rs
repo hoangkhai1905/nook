@@ -194,7 +194,11 @@ pub fn format_secs(secs: f64, round_up: bool) -> String {
 /// `45m`, `1h30m`, `1.5` (minutes). `None` if it is not a time or is out of
 /// range (1 s to 3 h).
 pub fn parse_duration(text: &str) -> Option<u32> {
-    let t: String = text.trim().to_ascii_lowercase().split_whitespace().collect();
+    let t: String = text
+        .trim()
+        .to_ascii_lowercase()
+        .split_whitespace()
+        .collect();
     if t.is_empty() {
         return None;
     }
@@ -218,13 +222,17 @@ pub fn parse_duration(text: &str) -> Option<u32> {
         let mut total: u32 = 0;
         let mut rest = t.as_str();
         while !rest.is_empty() {
-            let digits = rest.find(|c: char| !c.is_ascii_digit()).unwrap_or(rest.len());
+            let digits = rest
+                .find(|c: char| !c.is_ascii_digit())
+                .unwrap_or(rest.len());
             if digits == 0 {
                 return None;
             }
             let n: u32 = rest[..digits].parse().ok()?;
             rest = &rest[digits..];
-            let unit_len = rest.find(|c: char| c.is_ascii_digit()).unwrap_or(rest.len());
+            let unit_len = rest
+                .find(|c: char| c.is_ascii_digit())
+                .unwrap_or(rest.len());
             let scale = match &rest[..unit_len] {
                 "h" | "hr" | "hrs" | "hour" | "hours" => 3600,
                 "m" | "min" | "mins" | "minute" | "minutes" | "" => 60,
@@ -484,17 +492,19 @@ impl Module for Timer {
             }
         } else {
             let size = if text.len() > 5 { 12.0 } else { 15.0 };
-            ui.painter().text(
-                center,
-                Align2::CENTER_CENTER,
-                text,
+            paint::digit_slots(
+                ui.painter(),
+                &text,
                 Theme::font_semibold(size),
                 color,
+                center,
+                Align2::CENTER_CENTER,
             );
         }
 
         // Scroll over the tile to set the countdown.
-        if ctx.hovered && self.clock.mode == Mode::Countdown && !finished && self.editing.is_none() {
+        if ctx.hovered && self.clock.mode == Mode::Countdown && !finished && self.editing.is_none()
+        {
             let steps = self.wheel_steps(ui);
             if steps != 0 {
                 self.clock.adjust(steps);
@@ -643,7 +653,9 @@ mod tests {
         assert_eq!(parse_duration("2 min"), Some(120));
         // What the field shows when it opens parses back unchanged.
         assert_eq!(parse_duration(&format_secs(1500.0, true)), Some(1500));
-        for bad in ["", "abc", "5:75", "0", "0:00", "4h", "-3", "1x", "1:2:3:4", "::"] {
+        for bad in [
+            "", "abc", "5:75", "0", "0:00", "4h", "-3", "1x", "1:2:3:4", "::",
+        ] {
             assert_eq!(parse_duration(bad), None, "{bad:?}");
         }
     }
