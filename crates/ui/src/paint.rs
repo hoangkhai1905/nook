@@ -312,7 +312,9 @@ mod tests {
     fn digit_slots_keep_width_with_the_real_font() {
         let ctx = Context::default();
         crate::theme::install_fonts(&ctx);
-        ctx.run_ui(Default::default(), |_| {}).textures_delta.clear();
+        ctx.run_ui(Default::default(), |_| {})
+            .textures_delta
+            .clear();
         let font = FontId::proportional(14.0);
         let w = |s| digit_slots_width(&ctx, s, &font);
         assert!(w("00:00") > 0.0);
