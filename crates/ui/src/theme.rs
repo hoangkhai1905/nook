@@ -182,12 +182,6 @@ pub struct Theme {
     pub text: Color32,
     pub text_dim: Color32,
     pub text_faint: Color32,
-    /// The collapsed pill is always "ink" (a hardware-notch black), whatever
-    /// the theme; it blends into the surface as the shell opens.
-    pub pill_top: Color32,
-    pub pill_bottom: Color32,
-    pub pill_text: Color32,
-    pub pill_text_dim: Color32,
 }
 
 impl Theme {
@@ -210,7 +204,6 @@ impl Theme {
             1.0
         };
         let surface = with_alpha(roles.surface, alpha);
-        let ink_alpha = if translucent { 0.90 } else { 1.0 };
         Self {
             dark,
             roles,
@@ -223,21 +216,7 @@ impl Theme {
             text: roles.on_surface,
             text_dim: roles.on_surface_variant,
             text_faint: roles.outline,
-            pill_top: with_alpha(Color32::from_rgb(24, 24, 28), ink_alpha),
-            pill_bottom: with_alpha(Color32::from_rgb(6, 6, 8), ink_alpha),
-            pill_text: Color32::from_rgb(244, 244, 246),
-            pill_text_dim: Color32::from_rgb(150, 150, 160),
         }
-    }
-
-    /// Surface fill (top, bottom) at shell `progress`: ink pill at 0, the
-    /// surface from ~70% open.
-    pub fn glass_at(&self, progress: f32) -> (Color32, Color32) {
-        let t = blend(progress);
-        (
-            mix(self.pill_top, self.glass_top, t),
-            mix(self.pill_bottom, self.glass_bottom, t),
-        )
     }
 
     /// Fill for active tiles: the primary container.
@@ -257,13 +236,6 @@ impl Theme {
     pub fn font_semibold(size: f32) -> FontId {
         FontId::new(size, FontFamily::Name(FAMILY_SEMIBOLD.into()))
     }
-}
-
-/// Smoothstep of `progress / 0.7`: how far the pill look has turned into
-/// the panel look.
-fn blend(progress: f32) -> f32 {
-    let t = (progress / 0.7).clamp(0.0, 1.0);
-    t * t * (3.0 - 2.0 * t)
 }
 
 /// Multiplies a color's alpha (unmultiplied semantics).

@@ -1,6 +1,7 @@
-//! The notch shell: a squircle that springs between the collapsed pill and
-//! the expanded panel, painted as glass, hosting the pill badges and the
-//! panel content.
+//! The notch shell: a shape hanging from the top edge of the screen (with
+//! concave flares where it meets the edge) that springs between the
+//! collapsed pill and the expanded panel, painted as the surface colour,
+//! hosting the pill badges and the panel content.
 //!
 //! The OS window spans the whole width of the monitor's work area, so where
 //! the notch sits (left corner, center, right corner) only moves the shape
@@ -8,7 +9,7 @@
 //! itself never moves. A notch in a corner grows away from its edge.
 
 use crate::anim::{self, ease_out_cubic};
-use crate::geometry::{CORNER_EXPONENT, Squircle, lerp};
+use crate::geometry::{Notch, lerp};
 use crate::paint;
 use crate::shell_state::{ShellState, ShellTimings};
 use crate::spring::SpringParams;
@@ -49,8 +50,11 @@ pub struct ShellMetrics {
     /// Extra size while the pointer rests on the closed pill.
     pub hover_swell: Vec2,
     pub expanded: Vec2,
-    pub collapsed_radius: f32,
+    /// Bottom corner radius of the open panel (the pill is fully round).
     pub expanded_radius: f32,
+    /// Flare radius where the pill / the open panel meets the top edge.
+    pub collapsed_flare: f32,
+    pub expanded_flare: f32,
     /// Gap between the top of the monitor and the shell.
     pub top_margin: f32,
     /// Gap between the side of the monitor and a notch in a corner.
@@ -63,10 +67,11 @@ impl Default for ShellMetrics {
             collapsed: vec2(140.0, 34.0),
             hover_swell: vec2(12.0, 2.0),
             expanded: vec2(568.0, 236.0),
-            collapsed_radius: 17.0,
-            expanded_radius: 32.0,
-            top_margin: 6.0,
-            side_margin: 6.0,
+            expanded_radius: 28.0,
+            collapsed_flare: 10.0,
+            expanded_flare: 14.0,
+            top_margin: 0.0,
+            side_margin: 0.0,
         }
     }
 }
@@ -96,7 +101,7 @@ pub struct ContentCtx {
     pub closing: bool,
     /// Content scale transform (0.96 -> 1.0 about the panel center).
     pub transform: TSTransform,
-    /// The shell's current rect: content outside it is not on glass yet
+    /// The shell's current rect: content outside it is not on the surface yet
     /// (a tall page still springing open).
     pub shape: Rect,
 }
@@ -116,7 +121,7 @@ impl ContentCtx {
 
 pub struct ShellOutput {
     /// Current shape in window coordinates (points). Drive hit-testing with it.
-    pub shape: Squircle,
+    pub shape: Notch,
     /// 0 = pill, 1 = panel (may overshoot slightly).
     pub progress: f32,
     /// The closed pill was clicked while `capture_pill_click` was set (it
@@ -157,7 +162,7 @@ pub struct Shell {
     tall: f32,
     id: Id,
     outline: Vec<Pos2>,
-    last_shape: Option<Squircle>,
+    last_shape: Option<Notch>,
     reveal_start: Option<f64>,
 }
 
@@ -213,25 +218,26 @@ impl Shell {
 
     /// The pill at rest in its slot (no hover swell): the hot zone for
     /// revealing a hidden notch.
-    pub fn rest_shape(&self, window: Rect) -> Squircle {
+    pub fn rest_shape(&self, window: Rect) -> Notch {
         self.shape_for(window, self.collapsed(), 0.0, self.placement.frac())
     }
 
-    fn shape_for(&self, window: Rect, size: Vec2, progress: f32, frac: f32) -> Squircle {
+    fn shape_for(&self, window: Rect, size: Vec2, progress: f32, frac: f32) -> Notch {
         let m = &self.metrics;
         let min = pos2(
             self.left_for(window, size.x, frac),
             window.min.y + m.top_margin,
         );
-        let radius = lerp(
-            m.collapsed_radius,
-            m.expanded_radius,
-            progress.clamp(0.0, 1.0),
-        );
-        // Corners morph from a circular capsule (pill) to a squircle (panel).
-        let exponent = lerp(2.0, CORNER_EXPONENT, progress.clamp(0.0, 1.0));
-        Squircle::new(Rect::from_min_size(min, size), radius.min(size.y * 0.5))
-            .with_exponent(exponent)
+        let p = progress.clamp(0.0, 1.0);
+        let radius = lerp(m.collapsed.y * 0.5, m.expanded_radius, p);
+        // The flare sits on the inner side only: a notch in a corner has
+        // none against its screen side, a centered one has both.
+        let flare = lerp(m.collapsed_flare, m.expanded_flare, p);
+        let flare = [
+            flare * (frac * 2.0).clamp(0.0, 1.0),
+            flare * ((1.0 - frac) * 2.0).clamp(0.0, 1.0),
+        ];
+        Notch::new(Rect::from_min_size(min, size), radius, flare)
     }
 
     /// Runs one frame. `hidden` fades the whole shell out (fullscreen apps).
@@ -294,20 +300,29 @@ impl Shell {
         } else {
             self.collapsed()
         };
-        let shell_params = SpringParams::shell();
-        let w = anim::spring_from(
+        // Opening and closing use the slower spatial spring; the swell and
+        // width changes of the resting pill use the bouncier fast one.
+        let big = self
+            .last_shape
+            .is_some_and(|s| s.rect.height() > m.collapsed.y + m.hover_swell.y + 2.0);
+        let shell_params = if open || big {
+            SpringParams::spatial()
+        } else {
+            SpringParams::fast_spatial()
+        };
+        let (w, w_vel) = anim::spring_from_vel(
             &ctx,
             self.id.with("w"),
             m.collapsed.x,
             if open { expanded.x } else { rest.x },
             shell_params,
         );
-        let h = anim::spring_from(
+        let (h, h_vel) = anim::spring_from_vel(
             &ctx,
             self.id.with("h"),
             m.collapsed.y,
             if open { expanded.y } else { rest.y },
-            SpringParams::with_overshoot(220.0, 0.04),
+            shell_params,
         );
         let opacity = anim::spring_from(
             &ctx,
@@ -334,9 +349,10 @@ impl Shell {
             &ctx,
             self.id.with("x"),
             self.placement.frac(),
-            SpringParams::with_overshoot(240.0, 0.03),
+            SpringParams::fast_spatial(),
         );
         let shape = self.shape_for(window, vec2(w, h), progress, frac);
+        let shape = squash(shape, frac, w_vel / w, h_vel / h);
         shape.outline_into(&mut self.outline);
         self.last_shape = Some(shape);
 
@@ -353,14 +369,7 @@ impl Shell {
         }
 
         let painter = ui.painter().clone();
-        paint::glass(
-            &painter,
-            &self.outline,
-            theme,
-            opacity,
-            progress,
-            !composited,
-        );
+        paint::glass(&painter, &self.outline, theme, opacity, !composited);
 
         // Collapsed badges fade out as the shell grows.
         let pill_alpha = (1.0 - progress / 0.35).clamp(0.0, 1.0) * opacity;
@@ -426,6 +435,27 @@ impl Shell {
     }
 }
 
+/// Squash and stretch strength: how much of each size spring's relative
+/// velocity (1/s) shows as scale. Set to 0.0 to turn the effect off.
+const SQUASH: f32 = 0.012;
+/// Largest deformation either way (3%).
+const SQUASH_MAX: f32 = 0.03;
+
+/// Stretches `shape` along its motion, anchored to the top edge and the
+/// side it grows from, by the relative velocities `vx`, `vy` of its size.
+/// Identity once the springs settle (their velocity is then exactly 0).
+fn squash(shape: Notch, frac: f32, vx: f32, vy: f32) -> Notch {
+    let sx = 1.0 + (vx * SQUASH).clamp(-SQUASH_MAX, SQUASH_MAX);
+    let sy = 1.0 + (vy * SQUASH).clamp(-SQUASH_MAX, SQUASH_MAX);
+    let Rect { min, max } = shape.rect;
+    let ax = lerp(min.x, max.x, frac);
+    let rect = Rect::from_min_max(
+        pos2(ax + (min.x - ax) * sx, min.y),
+        pos2(ax + (max.x - ax) * sx, min.y + (max.y - min.y) * sy),
+    );
+    Notch { rect, ..shape }
+}
+
 /// Whether hovering may open (or keep open) the shell: when only a click
 /// opens it (`click_to_open`, or a notification owns the pill) only once it
 /// is already open, so hover keeps an opened panel up.
@@ -446,6 +476,33 @@ mod tests {
     use super::*;
 
     #[test]
+    fn hot_zone_reaches_the_top_pixel_row() {
+        let shell = Shell::new(ShellMetrics::default(), ShellTimings::default());
+        let window = Rect::from_min_size(Pos2::ZERO, vec2(1536.0, 300.0));
+        let rest = shell.rest_shape(window);
+        assert_eq!(rest.rect.min.y, 0.0);
+        assert!(rest.contains(pos2(window.center().x, 0.0)));
+        // The pill is fully round and the flares are on the flat top edge.
+        assert_eq!(rest.radius, shell.metrics.collapsed.y * 0.5);
+        assert_eq!(rest.flare, [shell.metrics.collapsed_flare; 2]);
+    }
+
+    #[test]
+    fn squash_is_identity_at_rest_and_bounded_in_motion() {
+        let shell = Shell::new(ShellMetrics::default(), ShellTimings::default());
+        let window = Rect::from_min_size(Pos2::ZERO, vec2(1536.0, 300.0));
+        let s = shell.shape_for(window, shell.metrics.expanded, 1.0, 0.5);
+        assert_eq!(squash(s, 0.5, 0.0, 0.0), s);
+        let fast = squash(s, 0.5, 100.0, -100.0);
+        assert!((fast.rect.width() / s.rect.width() - 1.0 - SQUASH_MAX).abs() < 1e-4);
+        assert!((fast.rect.height() / s.rect.height() - 1.0 + SQUASH_MAX).abs() < 1e-4);
+        // Anchored to the top edge and, for a corner notch, its screen side.
+        assert_eq!(fast.rect.min.y, s.rect.min.y);
+        assert_eq!(squash(s, 0.0, 100.0, 0.0).rect.min.x, s.rect.min.x);
+        assert_eq!(squash(s, 1.0, 100.0, 0.0).rect.max.x, s.rect.max.x);
+    }
+
+    #[test]
     fn corner_shells_hug_their_edge() {
         let shell = Shell::new(ShellMetrics::default(), ShellTimings::default());
         let window = Rect::from_min_size(Pos2::ZERO, vec2(1536.0, 300.0));
@@ -456,6 +513,11 @@ mod tests {
         assert_eq!(left.min.x, m.side_margin);
         assert_eq!(right.max.x, window.max.x - m.side_margin);
         assert!((center.center().x - window.center().x).abs() < 1e-3);
+        // The flare is on the inner side only; a centered notch has both.
+        let flares = |frac| shell.shape_for(window, m.expanded, 1.0, frac).flare;
+        assert_eq!(flares(0.0), [0.0, m.expanded_flare]);
+        assert_eq!(flares(1.0), [m.expanded_flare, 0.0]);
+        assert_eq!(flares(0.5), [m.expanded_flare; 2]);
         // A pill in the left corner keeps its left edge as it opens.
         let pill = shell.shape_for(window, m.collapsed, 0.0, 0.0).rect;
         assert_eq!(pill.min.x, left.min.x);

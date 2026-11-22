@@ -40,9 +40,25 @@ impl SpringParams {
         Self::critical(420.0)
     }
 
-    /// Shell expand/collapse: about 4% overshoot.
-    pub fn shell() -> Self {
-        Self::with_overshoot(260.0, 0.04)
+    // Calibrated against caelestia's M3 Expressive béziers by sampling them
+    // (see `springs_match_the_caelestia_beziers`):
+    //   expressiveDefaultSpatial (0.38, 1.21, 0.22, 1), 500 ms: peak
+    //     overshoot 1.39% at 280 ms, settles to 2% by 192 ms.
+    //   expressiveFastSpatial (0.42, 1.67, 0.21, 0.9), 350 ms: peak
+    //     overshoot 9.21% at 135 ms, settles to 2% by 219 ms.
+    // A spring's settle time falls as stiffness rises: k = 400 gives 190 ms
+    // (peak at 265 ms) and k = 750 gives 217 ms (peak at 144 ms). The
+    // overshoot arguments (1.68%, 9.76%) are above the targets (1.39%,
+    // 9.21%) because the 1/480 s semi-implicit Euler step damps the peak.
+
+    /// Shell open/close.
+    pub fn spatial() -> Self {
+        Self::with_overshoot(400.0, 0.0168)
+    }
+
+    /// Hover swell, pill width and placement.
+    pub fn fast_spatial() -> Self {
+        Self::with_overshoot(750.0, 0.0976)
     }
 
     /// Damping ratio (zeta). 1.0 is critical, below 1.0 overshoots.
@@ -173,9 +189,55 @@ mod tests {
         assert!((peak - 1.04).abs() < 0.006, "peak = {peak}");
     }
 
+    /// Peak overshoot and the last time the curve is more than 2% off 1,
+    /// for a cubic-bezier easing `(x1, y1, x2, y2)` over `secs`.
+    fn bezier_stats(c: [f32; 4], secs: f32) -> (f32, f32) {
+        let b = |t: f32, a: f32, b: f32| {
+            3.0 * (1.0 - t).powi(2) * t * a + 3.0 * (1.0 - t) * t * t * b + t.powi(3)
+        };
+        let (mut peak, mut settle) = (0.0f32, 0.0f32);
+        for i in 0..=20_000 {
+            let t = i as f32 / 20_000.0;
+            let (x, y) = (b(t, c[0], c[2]), b(t, c[1], c[3]));
+            peak = peak.max(y - 1.0);
+            if (y - 1.0).abs() > 0.02 {
+                settle = x * secs;
+            }
+        }
+        (peak, settle)
+    }
+
+    fn spring_stats(params: SpringParams) -> (f32, f32) {
+        let mut s = Spring::new(0.0, params);
+        s.set_target(1.0);
+        let (mut peak, mut settle, mut t) = (0.0f32, 0.0f32, 0.0f32);
+        while t < 2.0 {
+            s.step(1.0 / 480.0);
+            t += 1.0 / 480.0;
+            peak = peak.max(s.value - 1.0);
+            if (s.value - 1.0).abs() > 0.02 {
+                settle = t;
+            }
+        }
+        (peak, settle)
+    }
+
+    #[test]
+    fn springs_match_the_caelestia_beziers() {
+        for (spring, bezier, secs) in [
+            (SpringParams::spatial(), [0.38, 1.21, 0.22, 1.0], 0.5),
+            (SpringParams::fast_spatial(), [0.42, 1.67, 0.21, 0.9], 0.35),
+        ] {
+            let (bo, bs) = bezier_stats(bezier, secs);
+            let (so, ss) = spring_stats(spring);
+            assert!((so - bo).abs() <= 0.0015, "overshoot {so} vs {bo}");
+            assert!((ss - bs).abs() < 0.03, "settle {ss} vs {bs}");
+        }
+    }
+
     #[test]
     fn frame_rate_independent() {
-        let mut a = Spring::new(0.0, SpringParams::shell());
+        let mut a = Spring::new(0.0, SpringParams::spatial());
         let mut b = a;
         a.set_target(1.0);
         b.set_target(1.0);

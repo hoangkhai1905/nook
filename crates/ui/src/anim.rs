@@ -50,6 +50,17 @@ pub fn spring(ctx: &Context, id: Id, target: f32, params: SpringParams) -> f32 {
 
 /// Like [`spring`], but the first call starts at `initial`.
 pub fn spring_from(ctx: &Context, id: Id, initial: f32, target: f32, params: SpringParams) -> f32 {
+    spring_from_vel(ctx, id, initial, target, params).0
+}
+
+/// Like [`spring_from`], also returning the velocity (exactly 0 once settled).
+pub fn spring_from_vel(
+    ctx: &Context,
+    id: Id,
+    initial: f32,
+    target: f32,
+    params: SpringParams,
+) -> (f32, f32) {
     let now = ctx.input(|i| i.time);
     let mut slot = ctx
         .data(|d| d.get_temp::<SpringSlot>(id))
@@ -68,9 +79,9 @@ pub fn spring_from(ctx: &Context, id: Id, initial: f32, target: f32, params: Spr
         }
     }
     slot.last_time = now;
-    let value = slot.spring.value;
+    let out = (slot.spring.value, slot.spring.velocity);
     ctx.data_mut(|d| d.insert_temp(id, slot));
-    value
+    out
 }
 
 /// Two springs moving a point (or size) toward `target`; `snap` jumps

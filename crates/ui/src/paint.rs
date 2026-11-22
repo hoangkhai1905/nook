@@ -83,24 +83,60 @@ pub fn fill_gradient(painter: &Painter, outline: &[Pos2], top: Color32, bottom: 
     painter.add(Shape::mesh(mesh));
 }
 
-/// The shell's surface at shell `progress` (0 = pill, 1 = panel). With
+/// Ear-clips a simple clockwise (screen space) outline into triangles:
+/// the de-duplicated points and index triples into them.
+fn triangulate(outline: &[Pos2]) -> (Vec<Pos2>, Vec<u32>) {
+    let mut pts: Vec<Pos2> = Vec::with_capacity(outline.len());
+    for p in outline {
+        if pts.last().is_none_or(|q| q.distance_sq(*p) > 1e-6) {
+            pts.push(*p);
+        }
+    }
+    let cross = |a: Pos2, b: Pos2, c: Pos2| (b - a).x * (c - b).y - (b - a).y * (c - b).x;
+    let inside = |p: Pos2, a: Pos2, b: Pos2, c: Pos2| {
+        cross(a, b, p) >= 0.0 && cross(b, c, p) >= 0.0 && cross(c, a, p) >= 0.0
+    };
+    let mut tris = Vec::new();
+    let mut idx: Vec<u32> = (0..pts.len() as u32).collect();
+    while idx.len() > 3 {
+        let n = idx.len();
+        let ear = (0..n).find(|&i| {
+            let (a, b, c) = (idx[(i + n - 1) % n], idx[i], idx[(i + 1) % n]);
+            let (pa, pb, pc) = (pts[a as usize], pts[b as usize], pts[c as usize]);
+            cross(pa, pb, pc) > 1e-6
+                && !idx
+                    .iter()
+                    .any(|&j| ![a, b, c].contains(&j) && inside(pts[j as usize], pa, pb, pc))
+        });
+        // No ear (numerical noise): drop a vertex rather than loop forever.
+        let i = ear.unwrap_or(0);
+        tris.extend([idx[(i + n - 1) % n], idx[i], idx[(i + 1) % n]]);
+        idx.remove(i);
+    }
+    if idx.len() == 3 {
+        tris.extend(idx);
+    }
+    (pts, tris)
+}
+
+/// Flat fill of a simple (possibly concave) clockwise outline:
+/// `fill_gradient` fans from the centroid, which only works for convex
+/// shapes.
+pub fn fill_simple(painter: &Painter, outline: &[Pos2], color: Color32) {
+    let (pts, tris) = triangulate(outline);
+    let mut mesh = Mesh::default();
+    for p in &pts {
+        mesh.colored_vertex(*p, color);
+    }
+    mesh.indices = tris;
+    painter.add(Shape::mesh(mesh));
+}
+
+/// The shell's surface: one flat color for pill and panel. With
 /// `fill = false` the compositor draws it (see `nook_platform::backdrop`).
-pub fn glass(
-    painter: &Painter,
-    outline: &[Pos2],
-    theme: &Theme,
-    opacity: f32,
-    progress: f32,
-    fill: bool,
-) {
+pub fn glass(painter: &Painter, outline: &[Pos2], theme: &Theme, opacity: f32, fill: bool) {
     if fill {
-        let (top, bottom) = theme.glass_at(progress);
-        fill_gradient(
-            painter,
-            outline,
-            with_alpha(top, opacity),
-            with_alpha(bottom, opacity),
-        );
+        fill_simple(painter, outline, with_alpha(theme.glass_top, opacity));
     }
 }
 
@@ -184,6 +220,37 @@ fn lerp_color(a: Color32, b: Color32, t: f32) -> Color32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn notch_outline_triangulates_to_its_area() {
+        let notch = crate::geometry::Notch::new(
+            egui::Rect::from_min_size(pos2(50.0, 0.0), vec2(140.0, 34.0)),
+            17.0,
+            [0.0, 10.0],
+        );
+        let outline = notch.outline();
+        let (pts, tris) = triangulate(&outline);
+        let area =
+            |a: Pos2, b: Pos2, c: Pos2| ((b - a).x * (c - a).y - (b - a).y * (c - a).x) / 2.0;
+        let tri_area: f32 = tris
+            .chunks(3)
+            .map(|t| {
+                let a = area(pts[t[0] as usize], pts[t[1] as usize], pts[t[2] as usize]);
+                assert!(a > 0.0, "triangle must be clockwise");
+                a
+            })
+            .sum();
+        let poly_area: f32 = (0..pts.len())
+            .map(|i| {
+                let (a, b) = (pts[i], pts[(i + 1) % pts.len()]);
+                (a.x * b.y - b.x * a.y) / 2.0
+            })
+            .sum();
+        assert!(
+            (tri_area - poly_area).abs() < 0.5,
+            "{tri_area} vs {poly_area}"
+        );
+    }
 
     #[test]
     fn digit_slots_keep_width_with_the_real_font() {

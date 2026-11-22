@@ -93,6 +93,98 @@ impl Squircle {
     }
 }
 
+/// The shell's outline: a body hanging from the top edge of the screen with
+/// round bottom corners and a concave flare where each side meets the edge.
+/// `rect` is the body between the flares; the flares reach `flare` points
+/// beyond it on each side (0 = none, for a notch against a screen side).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Notch {
+    pub rect: Rect,
+    /// Bottom corner radius.
+    pub radius: f32,
+    /// Flare radius on the `[left, right]` side.
+    pub flare: [f32; 2],
+}
+
+impl Notch {
+    pub fn new(rect: Rect, radius: f32, flare: [f32; 2]) -> Self {
+        let r = radius.clamp(0.0, 0.5 * rect.width().min(rect.height()).max(0.0));
+        // A flare must fit on the straight part of the side.
+        let f = |f: f32| f.clamp(0.0, (rect.height() - r).max(0.0));
+        Self {
+            rect,
+            radius: r,
+            flare: [f(flare[0]), f(flare[1])],
+        }
+    }
+
+    /// The same shape grown by `d` points all round (slack for hit-testing
+    /// the anti-aliased edge).
+    pub fn expand(self, d: f32) -> Self {
+        Self {
+            rect: self.rect.expand(d),
+            radius: self.radius + d,
+            ..self
+        }
+    }
+
+    /// Is `p` inside (or on) the outline?
+    pub fn contains(&self, p: Pos2) -> bool {
+        let Rect { min, max } = self.rect;
+        if p.y < min.y || p.y > max.y {
+            return false;
+        }
+        let [fl, fr] = self.flare;
+        if p.x < min.x {
+            // Left flare: the corner square minus the circle that is cut out.
+            return fl > 0.0 && p.x >= min.x - fl && p.y <= min.y + fl && {
+                let c = pos2(min.x - fl, min.y + fl);
+                (p - c).length_sq() >= fl * fl - 1e-3
+            };
+        }
+        if p.x > max.x {
+            return fr > 0.0 && p.x <= max.x + fr && p.y <= min.y + fr && {
+                let c = pos2(max.x + fr, min.y + fr);
+                (p - c).length_sq() >= fr * fr - 1e-3
+            };
+        }
+        // Body: only the bottom corners are cut.
+        let r = self.radius;
+        let dx = (min.x + r - p.x).max(p.x - (max.x - r)).max(0.0);
+        let dy = (p.y - (max.y - r)).max(0.0);
+        dx * dx + dy * dy <= r * r + 1e-3
+    }
+
+    /// The outline, clockwise in screen space from the top-right end of the
+    /// top edge. Not convex: the flares curve inward.
+    pub fn outline(&self) -> Vec<Pos2> {
+        let mut pts = Vec::with_capacity(4 * (CORNER_SEGMENTS + 1));
+        self.outline_into(&mut pts);
+        pts
+    }
+
+    pub fn outline_into(&self, pts: &mut Vec<Pos2>) {
+        pts.clear();
+        let Rect { min, max } = self.rect;
+        let [fl, fr] = self.flare;
+        let r = self.radius;
+        // (center, radius, start angle in degrees, sweep in degrees)
+        let arcs = [
+            (pos2(max.x + fr, min.y + fr), fr, -90.0_f32, -90.0_f32), // right flare
+            (pos2(max.x - r, max.y - r), r, 0.0, 90.0),               // bottom-right
+            (pos2(min.x + r, max.y - r), r, 90.0, 90.0),              // bottom-left
+            (pos2(min.x - fl, min.y + fl), fl, 0.0, -90.0),           // left flare
+        ];
+        for (c, radius, start, sweep) in arcs {
+            for s in 0..=CORNER_SEGMENTS {
+                let deg = start + sweep * s as f32 / CORNER_SEGMENTS as f32;
+                let (sin, cos) = deg.to_radians().sin_cos();
+                pts.push(c + vec2(cos, sin) * radius);
+            }
+        }
+    }
+}
+
 /// Linear interpolation helper.
 pub fn lerp(a: f32, b: f32, t: f32) -> f32 {
     a + (b - a) * t
@@ -314,6 +406,80 @@ mod tests {
             let c = pts[(i + 2) % n];
             let cross = (b - a).x * (c - b).y - (b - a).y * (c - b).x;
             assert!(cross >= -1e-3, "concave at {i}");
+        }
+    }
+
+    fn notch() -> Notch {
+        // Body x 100..240 (a 140 x 34 pill), flares 10 on both sides.
+        Notch::new(
+            Rect::from_min_size(pos2(100.0, 0.0), vec2(140.0, 34.0)),
+            17.0,
+            [10.0, 10.0],
+        )
+    }
+
+    #[test]
+    fn notch_contains_the_flares() {
+        let n = notch();
+        // Body and the top edge across the flares.
+        assert!(n.contains(pos2(170.0, 17.0)));
+        assert!(n.contains(pos2(95.0, 0.5)));
+        assert!(n.contains(pos2(245.0, 0.5)));
+        // Just outside the concave arc, next to the body (inside the flare).
+        assert!(n.contains(pos2(99.0, 2.0)));
+        assert!(n.contains(pos2(241.0, 2.0)));
+        // The scooped-out corner: inside the flare square, inside the circle.
+        assert!(!n.contains(pos2(92.0, 8.0)));
+        assert!(!n.contains(pos2(248.0, 8.0)));
+        // Below the flare, and beyond its reach.
+        assert!(!n.contains(pos2(99.0, 12.0)));
+        assert!(!n.contains(pos2(89.0, 0.5)));
+        assert!(!n.contains(pos2(171.0, -0.5)));
+    }
+
+    #[test]
+    fn notch_bottom_corners_are_round() {
+        let n = notch();
+        assert!(!n.contains(pos2(100.5, 33.5)));
+        assert!(!n.contains(pos2(239.5, 33.5)));
+        assert!(!n.contains(pos2(105.0, 33.5)));
+        assert!(!n.contains(pos2(170.0, 34.5)));
+        assert!(n.contains(pos2(117.0, 33.5)));
+        // No flare against a screen side.
+        let left = Notch::new(n.rect, 17.0, [0.0, 10.0]);
+        assert!(!left.contains(pos2(95.0, 0.5)));
+        assert!(left.contains(pos2(245.0, 0.5)));
+    }
+
+    #[test]
+    fn notch_outline_matches_contains() {
+        for n in [notch(), Notch::new(notch().rect, 17.0, [0.0, 10.0])] {
+            let pts = n.outline();
+            // Clockwise (positive area in screen space) and simple enough
+            // that every vertex is on the boundary of `contains`.
+            let mut area2 = 0.0;
+            for i in 0..pts.len() {
+                let (a, b) = (pts[i], pts[(i + 1) % pts.len()]);
+                area2 += a.x * b.y - b.x * a.y;
+            }
+            assert!(area2 > 0.0);
+            for p in &pts {
+                assert!(n.contains(*p), "{p:?} should be on/inside");
+            }
+            // The polygon area agrees with a grid count of `contains`.
+            let mut hits = 0.0;
+            for y in 0..340 {
+                for x in 850..2550 {
+                    if n.contains(pos2(x as f32 / 10.0 + 0.05, y as f32 / 10.0 + 0.05)) {
+                        hits += 0.01;
+                    }
+                }
+            }
+            assert!(
+                (hits - area2 / 2.0).abs() < 20.0,
+                "{hits} vs {}",
+                area2 / 2.0
+            );
         }
     }
 

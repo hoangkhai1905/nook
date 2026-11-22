@@ -24,7 +24,7 @@ use nook_platform::system::Battery;
 use nook_platform::{Hwnd, startup, system, wallpaper, window};
 use nook_ui::anim::{self, Motion};
 use nook_ui::bento;
-use nook_ui::geometry::Squircle;
+use nook_ui::geometry::Notch;
 use nook_ui::module::{Badge, Module, Registry};
 use nook_ui::paint;
 use nook_ui::shell::{Shell, ShellMetrics, ShellOutput};
@@ -611,7 +611,7 @@ impl NookApp {
             return;
         };
         let ppp = ctx.pixels_per_point();
-        let (top, bottom) = theme.glass_at(out.progress);
+        let (top, bottom) = (theme.glass_top, theme.glass_bottom);
         let unmult = |c: Color32| theme::with_alpha(c, out.opacity).to_srgba_unmultiplied();
         let rect = out.shape.rect;
         let tint = Tint {
@@ -632,7 +632,7 @@ impl NookApp {
     fn update_shape(
         &mut self,
         ctx: &egui::Context,
-        shape: Option<Squircle>,
+        shape: Option<Notch>,
         extra: Option<Rect>,
         due: bool,
     ) {
@@ -663,10 +663,8 @@ impl NookApp {
             let mut polygons = Vec::with_capacity(2);
             if let Some(s) = shape {
                 // A point of slack so the anti-aliased edge still counts.
-                let padded =
-                    Squircle::new(s.rect.expand(1.0), s.radius + 1.0).with_exponent(s.exponent);
                 polygons.push(
-                    padded
+                    s.expand(1.0)
                         .outline()
                         .iter()
                         .map(|p| (ox + p.x * ppp, oy + p.y * ppp))
@@ -695,7 +693,12 @@ impl NookApp {
                 .map(|(x, y, _, _)| (x as f32, y as f32))
                 .unwrap_or_default();
             let ppp = ctx.pixels_per_point();
-            let outline = self.shell.rest_shape(ctx.content_rect()).outline();
+            // A point of slack: the top pixel row sits on the polygon's edge.
+            let outline = self
+                .shell
+                .rest_shape(ctx.content_rect())
+                .expand(1.0)
+                .outline();
             polygons.push(
                 outline
                     .iter()
@@ -955,14 +958,14 @@ fn draw_pill(badges: Vec<Badge>, battery: Option<Battery>, ui: &mut Ui, rect: Re
                 r,
                 2.0,
                 progress,
-                theme::with_alpha(theme.pill_text_dim, 0.35),
+                theme::with_alpha(theme.text_dim, 0.35),
                 theme.accent,
             );
             ink_digits(
                 painter,
                 &label,
                 Theme::font_semibold(SIZE_BODY),
-                theme.pill_text,
+                theme.text,
                 left + 2.0 * r + 7.0,
                 cy,
             )
@@ -974,7 +977,7 @@ fn draw_pill(badges: Vec<Badge>, battery: Option<Battery>, ui: &mut Ui, rect: Re
                 painter,
                 &clock.time,
                 Theme::font_semibold(SIZE_BODY),
-                theme.pill_text,
+                theme.text,
                 left,
                 cy,
             )
@@ -987,7 +990,7 @@ fn draw_pill(badges: Vec<Badge>, battery: Option<Battery>, ui: &mut Ui, rect: Re
     // clock. Other right-side badges sit left of the bars.
     let media = media_badge(&badges);
     if media.is_some() {
-        right = paint_bars(painter, right, cy, now, theme.pill_text) - 8.0;
+        right = paint_bars(painter, right, cy, now, theme.text) - 8.0;
         ui.ctx().request_repaint_after(Duration::from_millis(33));
     }
 
@@ -1039,23 +1042,19 @@ fn draw_pill(badges: Vec<Badge>, battery: Option<Battery>, ui: &mut Ui, rect: Re
                     );
                 }
                 None => {
-                    painter.rect_filled(
-                        art_rect,
-                        5.0,
-                        theme::with_alpha(theme.pill_text_dim, 0.25),
-                    );
+                    painter.rect_filled(art_rect, 5.0, theme::with_alpha(theme.text_dim, 0.25));
                     painter.text(
                         art_rect.center(),
                         egui::Align2::CENTER_CENTER,
                         nook_ui::icons::MUSIC_NOTES,
                         icon_font(12.0, false),
-                        theme.pill_text_dim,
+                        theme.text_dim,
                     );
                 }
             }
             let mut job = egui::text::LayoutJob::single_section(
                 title.to_owned(),
-                egui::text::TextFormat::simple(Theme::font(SIZE_LABEL + 1.0), theme.pill_text),
+                egui::text::TextFormat::simple(Theme::font(SIZE_LABEL + 1.0), theme.text),
             );
             job.wrap = egui::text::TextWrapping {
                 max_width: right - text_x,
@@ -1065,7 +1064,7 @@ fn draw_pill(badges: Vec<Badge>, battery: Option<Battery>, ui: &mut Ui, rect: Re
             };
             let galley = painter.layout_job(job);
             let pos = pos2(text_x, cy - galley.size().y / 2.0);
-            painter.galley(pos, galley, theme.pill_text);
+            painter.galley(pos, galley, theme.text);
         }
     } else if !any_right {
         match battery {
@@ -1074,7 +1073,7 @@ fn draw_pill(badges: Vec<Badge>, battery: Option<Battery>, ui: &mut Ui, rect: Re
                     painter,
                     &format!("{}%", b.percent),
                     Theme::font(SIZE_LABEL + 1.0),
-                    theme.pill_text_dim,
+                    theme.text_dim,
                     right,
                     cy,
                     true,
@@ -1095,7 +1094,7 @@ fn draw_pill(badges: Vec<Badge>, battery: Option<Battery>, ui: &mut Ui, rect: Re
                     painter,
                     &clock.date,
                     Theme::font(SIZE_LABEL + 1.0),
-                    theme.pill_text_dim,
+                    theme.text_dim,
                     right,
                     cy,
                     true,
@@ -1158,7 +1157,7 @@ fn draw_notice(view: &NoticeView, ui: &mut Ui, rect: Rect, theme: &Theme) {
             painter,
             &format!("+{}", view.more),
             Theme::font_semibold(SIZE_LABEL),
-            theme.pill_text_dim,
+            theme.text_dim,
             right,
             cy,
             true,
@@ -1187,18 +1186,13 @@ fn draw_notice(view: &NoticeView, ui: &mut Ui, rect: Rect, theme: &Theme) {
                 egui::Align2::CENTER_CENTER,
                 nook_ui::icons::BELL,
                 icon_font(14.0, false),
-                theme.pill_text_dim,
+                theme.text_dim,
             );
         }
     }
-    let galley = painter.layout_job(notice_job(
-        view,
-        theme.pill_text,
-        theme.pill_text_dim,
-        right - text_x,
-    ));
+    let galley = painter.layout_job(notice_job(view, theme.text, theme.text_dim, right - text_x));
     let pos = pos2(text_x, cy - galley.size().y / 2.0);
-    painter.galley(pos, galley, theme.pill_text);
+    painter.galley(pos, galley, theme.text);
 }
 
 /// Width the pill springs to while media plays.
@@ -1269,7 +1263,7 @@ fn battery_icon(b: Battery, theme: &Theme) -> (&'static str, Color32) {
     let color = if b.percent < 12 {
         Color32::from_rgb(255, 99, 88)
     } else {
-        theme.pill_text_dim
+        theme.text_dim
     };
     (icon, color)
 }
@@ -1499,12 +1493,7 @@ impl eframe::App for NookApp {
         self.shell.collapsed_width = if let Some(view) = &notice {
             let text_w = ctx
                 .layer_painter(egui::LayerId::background())
-                .layout_job(notice_job(
-                    view,
-                    theme.pill_text,
-                    theme.pill_text_dim,
-                    f32::INFINITY,
-                ))
+                .layout_job(notice_job(view, theme.text, theme.text_dim, f32::INFINITY))
                 .size()
                 .x;
             let count_w = match view.more {
