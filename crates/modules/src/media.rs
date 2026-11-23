@@ -108,6 +108,10 @@ impl Module for Media {
         TileSize::Large
     }
 
+    fn default_size(&self) -> TileSize {
+        TileSize::new(3, 2)
+    }
+
     fn is_active(&self) -> bool {
         self.now.as_ref().is_some_and(|n| n.playing)
     }

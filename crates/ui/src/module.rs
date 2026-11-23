@@ -9,8 +9,37 @@
 
 pub use crate::geometry::TileSize;
 use crate::theme::Theme;
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::time::Duration;
+
+/// The panel's four fixed tabs.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Tab {
+    #[default]
+    Home,
+    Tools,
+    Capture,
+    System,
+}
+
+impl Tab {
+    pub const ALL: [Tab; 4] = [Tab::Home, Tab::Tools, Tab::Capture, Tab::System];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            Tab::Home => "Home",
+            Tab::Tools => "Tools",
+            Tab::Capture => "Capture",
+            Tab::System => "System",
+        }
+    }
+
+    pub fn index(self) -> usize {
+        Self::ALL.iter().position(|&t| t == self).unwrap_or(0)
+    }
+}
 
 /// Live activity a module mirrors into the collapsed pill.
 #[derive(Clone, Debug, PartialEq)]
@@ -54,7 +83,13 @@ pub trait Module: Send {
     fn name(&self) -> &str;
     /// Phosphor glyph. Drawn "regular" when idle and "fill" when active.
     fn icon(&self) -> &'static str;
+    /// The size the content is laid out for; a tile shown smaller draws the
+    /// compact face instead.
     fn size_hint(&self) -> TileSize;
+    /// The size a tile starts at, until the user resizes it.
+    fn default_size(&self) -> TileSize {
+        self.size_hint()
+    }
 
     fn status(&self) -> ModuleStatus {
         ModuleStatus::Ready
@@ -137,10 +172,6 @@ pub trait Module: Send {
     fn drop_files(&mut self, _paths: Vec<PathBuf>) {}
     /// Restore any system state the module changed. Called on exit.
     fn shutdown(&mut self) {}
-    /// False for tiles that must stay in the grid (settings).
-    fn can_hide(&self) -> bool {
-        true
-    }
 }
 
 /// A module as the grid draws it.
@@ -148,6 +179,7 @@ pub struct GridTile<'a> {
     pub module: &'a mut Box<dyn Module>,
     /// The size the user picked, else the module's own.
     pub size: TileSize,
+    pub tab: Tab,
     /// Hidden from the grid; only edit mode shows it (dimmed).
     pub hidden: bool,
 }
@@ -162,6 +194,8 @@ pub struct Registry {
     all_order: Vec<usize>,
     /// Tile sizes the user picked, by module id; others use `size_hint`.
     sizes: Vec<(String, TileSize)>,
+    /// The tab of each module, by id; a module not listed is in System.
+    tabs: Vec<(String, Tab)>,
 }
 
 impl Registry {
@@ -194,12 +228,40 @@ impl Registry {
         self.sizes = sizes.into_iter().map(|(k, v)| (k.clone(), *v)).collect();
     }
 
+    /// Replaces the tab of every module that has one.
+    pub fn set_tabs<'a>(&mut self, tabs: impl IntoIterator<Item = (&'a String, &'a Tab)>) {
+        self.tabs = tabs.into_iter().map(|(k, v)| (k.clone(), *v)).collect();
+    }
+
     /// The size `module` is shown at.
     pub fn size_of(&self, module: &dyn Module) -> TileSize {
         self.sizes
             .iter()
             .find(|(id, _)| id == module.id())
-            .map_or_else(|| module.size_hint(), |(_, s)| *s)
+            .map_or_else(|| module.default_size(), |(_, s)| *s)
+    }
+
+    /// The tab `module` is in.
+    pub fn tab_of(&self, module: &dyn Module) -> Tab {
+        self.tabs
+            .iter()
+            .find(|(id, _)| id == module.id())
+            .map_or(Tab::System, |(_, t)| *t)
+    }
+
+    /// Sizes of the tiles in `tab`, in display order (hidden ones too with
+    /// `with_hidden`).
+    pub fn tab_sizes(&self, tab: Tab, with_hidden: bool) -> Vec<TileSize> {
+        let idx = if with_hidden {
+            &self.all_order
+        } else {
+            &self.order
+        };
+        idx.iter()
+            .map(|&i| self.modules[i].as_ref())
+            .filter(|m| self.tab_of(*m) == tab)
+            .map(|m| self.size_of(m))
+            .collect()
     }
 
     /// Tiles for the grid in display order: the enabled ones, or with
@@ -210,24 +272,25 @@ impl Registry {
         } else {
             self.order.clone()
         };
-        let meta: Vec<(TileSize, bool)> = idx
+        let meta: Vec<(TileSize, Tab, bool)> = idx
             .iter()
             .map(|&i| {
                 let m = self.modules[i].as_ref();
-                (self.size_of(m), !self.order.contains(&i))
+                (self.size_of(m), self.tab_of(m), !self.order.contains(&i))
             })
             .collect();
         let mut slots: Vec<Option<&mut Box<dyn Module>>> =
             self.modules.iter_mut().map(Some).collect();
         idx.iter()
             .zip(meta)
-            .filter_map(|(&i, (size, hidden))| {
+            .filter_map(|(&i, (size, tab, hidden))| {
                 slots
                     .get_mut(i)
                     .and_then(Option::take)
                     .map(|module| GridTile {
                         module,
                         size,
+                        tab,
                         hidden,
                     })
             })

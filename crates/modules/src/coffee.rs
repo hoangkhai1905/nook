@@ -119,6 +119,10 @@ impl Module for Coffee {
         TileSize::Wide
     }
 
+    fn default_size(&self) -> TileSize {
+        TileSize::Small
+    }
+
     fn is_active(&self) -> bool {
         self.on.is_some()
     }

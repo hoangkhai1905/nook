@@ -28,34 +28,44 @@ pub mod timer;
 pub mod voice_memo;
 pub mod wallpaper;
 
-use nook_ui::module::Registry;
+use nook_ui::module::{Registry, Tab};
 
-/// Default tile order. Packs the first 8x3 grid exactly with the settings
-/// tile (added by the app) in the last cell; the rest go on the next page.
+/// Default tile order: each tab's tiles in the order they show.
 pub const DEFAULT_ORDER: &[&str] = &[
+    "media",
     "timer",
     "coffee",
-    "media",
     "notes",
+    "calendar",
     "clipboard",
     "color_picker",
+    "calculator",
+    "file_shelf",
+    "font_detector",
+    "qr_code",
+    "quick_launch",
     "screenshot",
     "ocr",
     "lens",
     "draw",
-    "phone_link",
-    "file_shelf",
-    "settings",
-    "font_detector",
-    "wallpaper",
-    "calculator",
-    "system_monitor",
-    "calendar",
-    "quick_launch",
-    "qr_code",
     "voice_memo",
+    "system_monitor",
+    "wallpaper",
+    "phone_link",
     "plugins",
 ];
+
+/// The tab a module starts in. Anything not listed (a newly installed
+/// plugin, say) lands in System.
+pub fn default_tab(id: &str) -> Tab {
+    match id {
+        "media" | "timer" | "coffee" | "notes" | "calendar" => Tab::Home,
+        "clipboard" | "color_picker" | "calculator" | "file_shelf" | "font_detector"
+        | "qr_code" | "quick_launch" => Tab::Tools,
+        "screenshot" | "ocr" | "lens" | "draw" | "voice_memo" => Tab::Capture,
+        _ => Tab::System,
+    }
+}
 
 pub fn register_all(reg: &mut Registry) {
     reg.register(Box::<timer::Timer>::default());
@@ -70,7 +80,6 @@ pub fn register_all(reg: &mut Registry) {
     reg.register(Box::<draw::Draw>::default());
     reg.register(Box::<phone_link::PhoneLink>::default());
     reg.register(Box::<file_shelf::FileShelf>::default());
-    // Past the first grid: the second page.
     reg.register(Box::<font_detector::FontDetector>::default());
     reg.register(Box::<wallpaper::Wallpaper>::default());
     reg.register(Box::<calculator::Calculator>::default());

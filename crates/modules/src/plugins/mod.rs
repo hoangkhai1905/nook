@@ -639,7 +639,7 @@ impl Module for Plugin {
             let name = match size {
                 TileSize::Small => "small",
                 TileSize::Wide => "wide",
-                TileSize::Large => "large",
+                _ => "large",
             };
             self.send(protocol::msg_layout(
                 "tile",

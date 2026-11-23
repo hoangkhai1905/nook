@@ -339,6 +339,10 @@ impl Module for Timer {
         TileSize::Large
     }
 
+    fn default_size(&self) -> TileSize {
+        TileSize::Small
+    }
+
     fn is_active(&self) -> bool {
         self.clock.phase != Phase::Idle
     }

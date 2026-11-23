@@ -5,7 +5,7 @@
 use crate::config::{AccentSource, Config, Material, MonitorMode};
 use crate::notify::{self, Notices};
 use crate::reveal::Reveal;
-use crate::settings::{self, SETTINGS_ID, SettingsTile};
+use crate::settings;
 use crate::stats::{self, Stats};
 use crate::tray::{Tray, TrayCommand};
 use crate::update::{self, Updater};
@@ -25,7 +25,7 @@ use nook_platform::{Hwnd, startup, system, wallpaper, window};
 use nook_ui::anim::{self, Motion};
 use nook_ui::bento;
 use nook_ui::geometry::Notch;
-use nook_ui::module::{Badge, Module, Registry};
+use nook_ui::module::{Badge, Module, Registry, Tab};
 use nook_ui::paint;
 use nook_ui::shell::{Shell, ShellMetrics, ShellOutput};
 use nook_ui::shell_state::ShellTimings;
@@ -114,9 +114,12 @@ pub struct NookApp {
     shell: Shell,
     registry: Registry,
     page: Page,
-    /// The grid is in edit mode (pencil in the gutter).
+    /// The grid is in edit mode (the pencil in the tab bar).
     editing: bool,
     pinned_before_edit: bool,
+    /// Rows the grid needed at the last frame, and for which tab: an opened
+    /// tile or a resize can need more than the tab's own sizes say.
+    bento_rows: (Tab, usize),
     tray: Option<Tray>,
     /// This run draws with OpenGL (else DirectX).
     on_gl: bool,
@@ -240,15 +243,13 @@ impl NookApp {
         nook_modules::plugins::set_dev_mode(cfg.plugin_dev);
         let mut registry = Registry::default();
         nook_modules::register_all(&mut registry);
-        registry.register(Box::new(SettingsTile));
         // Tools that ship with Nook; usage stats count only these by name.
         let builtin = registry
             .all()
             .map(|m| m.id())
             .filter(|id| !id.starts_with(nook_modules::plugins::ID_PREFIX))
             .collect();
-        registry.arrange(&cfg.modules.order, &cfg.modules.disabled);
-        registry.set_sizes(&cfg.modules.sizes);
+        cfg.modules.apply(&mut registry);
         for m in registry.all_mut() {
             m.attach(&ctx);
         }
@@ -307,6 +308,7 @@ impl NookApp {
             page,
             editing: false,
             pinned_before_edit: false,
+            bento_rows: (Tab::default(), 0),
             tray,
             tray_rx,
             hotkeys,
@@ -408,17 +410,27 @@ impl NookApp {
                         .registry
                         .all()
                         .find(|m| m.id() == id)
-                        .map(|m| m.size_hint());
+                        .map(|m| m.default_size());
                     if Some(size) == native {
                         modules.sizes.remove(id);
                     } else {
                         modules.sizes.insert(id.to_owned(), size);
                     }
                 }
+                bento::Edit::MoveTab(id, tab) => {
+                    if tab == nook_modules::default_tab(id) {
+                        modules.tabs.remove(id);
+                    } else {
+                        modules.tabs.insert(id.to_owned(), tab);
+                    }
+                    // Last in its new tab, which opens to show it.
+                    modules.order.retain(|o| o != id);
+                    modules.order.push(id.to_owned());
+                    modules.last_tab = tab;
+                }
             }
         }
-        self.registry.arrange(&modules.order, &modules.disabled);
-        self.registry.set_sizes(&modules.sizes);
+        modules.apply(&mut self.registry);
         // Hiding or showing a tile frees or takes its shortcut right away.
         if let Some(hk) = &mut self.hotkeys {
             for m in self.registry.all() {
@@ -739,7 +751,17 @@ impl NookApp {
     fn page_size(&self, ctx: &egui::Context) -> Option<egui::Vec2> {
         let m = self.shell.metrics;
         let want = match self.page {
-            Page::Bento => return None,
+            // The panel is as tall as the tab's rows (never under the
+            // regular height, see below); it springs when the tab changes.
+            Page::Bento => {
+                let tab = self.cfg.modules.last_tab;
+                let sizes = self.registry.tab_sizes(tab, self.editing);
+                let mut h = bento::tab_height(&sizes, self.editing);
+                if self.bento_rows.0 == tab {
+                    h = h.max(bento::panel_height(self.bento_rows.1));
+                }
+                vec2(m.expanded.x, h)
+            }
             Page::Settings => m.expanded + vec2(0.0, settings::extra_height(ctx, m.expanded.y)),
             Page::Module(id) => self.registry.all().find(|m| m.id() == id)?.page_size()?,
         };
@@ -805,9 +827,7 @@ impl NookApp {
                 hk.add_module(m, &self.cfg);
             }
         }
-        let modules = &self.cfg.modules;
-        self.registry.arrange(&modules.order, &modules.disabled);
-        self.registry.set_sizes(&modules.sizes);
+        self.cfg.modules.apply(&mut self.registry);
         self.save_config();
     }
 
@@ -1731,16 +1751,21 @@ impl eframe::App for NookApp {
             |ui, cctx| match page {
                 Page::Bento => {
                     let mut tiles = registry.grid_mut(editing);
-                    grid_out = bento::show(ui, cctx, &theme, &mut tiles, editing);
+                    grid_out = bento::show(
+                        ui,
+                        cctx,
+                        &theme,
+                        &mut tiles,
+                        editing,
+                        &mut cfg.modules.last_tab,
+                    );
                     clicked = grid_out.clicked;
-                    // The Update chip sits in the middle of the bottom
-                    // gutter, between the pencil and the page dots.
-                    if !editing && cctx.alpha > 0.5 {
-                        let grid = bento::grid_rect(cctx.panel);
-                        let y = grid.max.y + (cctx.panel.max.y - grid.max.y) * 0.5 - 1.0;
+                    // The Update chip sits in the middle of the bottom gutter.
+                    let y = bento::gutter_y(cctx.panel);
+                    if !editing && cctx.alpha > 0.5 && y < cctx.shape.max.y - 4.0 {
                         update_clicked = update::chip(
                             ui,
-                            pos2(grid.center().x, y),
+                            pos2(cctx.panel.center().x, y),
                             egui::Align2::CENTER_CENTER,
                             &update_status,
                             &theme,
@@ -1799,8 +1824,18 @@ impl eframe::App for NookApp {
             self.stats.tool(id);
         }
         self.stats.panel(self.shell.state.is_open());
-        if clicked == Some(SETTINGS_ID) {
+        if grid_out.open_settings {
             self.page = Page::Settings;
+        }
+        if grid_out.tab_changed {
+            self.save_config();
+        }
+        if page == Page::Bento && grid_out.rows > 0 {
+            let seen = (self.cfg.modules.last_tab, grid_out.rows);
+            if self.bento_rows != seen {
+                self.bento_rows = seen;
+                ctx.request_repaint();
+            }
         }
         if settings_out.back || module_back {
             self.page = Page::Bento;
@@ -1854,6 +1889,7 @@ impl eframe::App for NookApp {
         if out.progress < 0.05 && !self.shell.state.is_open() {
             self.page = Page::Bento;
             self.editing = false;
+            self.bento_rows.1 = 0;
             ctx.memory_mut(|m| m.stop_text_input());
         }
 

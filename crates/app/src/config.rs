@@ -1,7 +1,7 @@
 //! User configuration in `%APPDATA%\Nook\config.toml`.
 
 use anyhow::{Context, Result};
-use nook_ui::module::TileSize;
+use nook_ui::module::{Tab, TileSize};
 use nook_ui::shell::Placement;
 use nook_ui::theme::{Look, ThemeMode};
 use serde::{Deserialize, Serialize};
@@ -57,8 +57,35 @@ pub struct ModulesConfig {
     /// are appended.
     pub order: Vec<String>,
     pub disabled: Vec<String>,
-    /// Tile sizes picked in the editor; modules not listed use their own.
+    /// Tile sizes picked in the editor, as `"3x2"` (the old `small`, `wide`
+    /// and `large` still read); modules not listed use their own.
     pub sizes: std::collections::BTreeMap<String, TileSize>,
+    /// Tabs picked in the editor; modules not listed are in their default
+    /// tab (System for a module with none). Order within a tab is `order`.
+    pub tabs: std::collections::BTreeMap<String, Tab>,
+    /// The tab the panel opens on: the last one used.
+    pub last_tab: Tab,
+}
+
+impl ModulesConfig {
+    /// The tab module `id` is in.
+    pub fn tab_of(&self, id: &str) -> Tab {
+        self.tabs
+            .get(id)
+            .copied()
+            .unwrap_or_else(|| nook_modules::default_tab(id))
+    }
+
+    /// Puts the order, hidden tiles, sizes and tabs into effect.
+    pub fn apply(&self, registry: &mut nook_ui::module::Registry) {
+        registry.arrange(&self.order, &self.disabled);
+        registry.set_sizes(&self.sizes);
+        let tabs: Vec<(String, Tab)> = registry
+            .all()
+            .map(|m| (m.id().to_owned(), self.tab_of(m.id())))
+            .collect();
+        registry.set_tabs(tabs.iter().map(|(id, tab)| (id, tab)));
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -147,6 +174,8 @@ impl Default for Config {
                     .collect(),
                 disabled: Vec::new(),
                 sizes: Default::default(),
+                tabs: Default::default(),
+                last_tab: Tab::default(),
             },
         }
     }
@@ -319,6 +348,82 @@ mod tests {
         let back: Config =
             toml::from_str(&toml::to_string_pretty(&cfg).expect("ser")).expect("parse");
         assert_eq!(cfg, back);
+    }
+
+    fn ids_in(cfg: &Config, tab: Tab) -> Vec<&str> {
+        let m = &cfg.modules;
+        let ids = m.order.iter().map(String::as_str);
+        ids.filter(|id| m.tab_of(id) == tab).collect()
+    }
+
+    #[test]
+    fn default_tabs_follow_the_issue() {
+        let cfg = Config::default();
+        assert_eq!(
+            ids_in(&cfg, Tab::Home),
+            ["media", "timer", "coffee", "notes", "calendar"]
+        );
+        assert_eq!(ids_in(&cfg, Tab::Tools).len(), 7);
+        assert_eq!(
+            ids_in(&cfg, Tab::Capture),
+            ["screenshot", "ocr", "lens", "draw", "voice_memo"]
+        );
+        assert_eq!(
+            ids_in(&cfg, Tab::System),
+            ["system_monitor", "wallpaper", "phone_link", "plugins"]
+        );
+        // Not listed anywhere (a new plugin): System, until the user moves it.
+        assert_eq!(cfg.modules.tab_of("plugin:new"), Tab::System);
+        let mut cfg = cfg;
+        cfg.modules.tabs.insert("plugin:new".into(), Tab::Tools);
+        assert_eq!(cfg.modules.tab_of("plugin:new"), Tab::Tools);
+    }
+
+    #[test]
+    fn an_old_config_migrates_to_tabs_and_new_sizes() {
+        // No tabs, the settings tile, the old size names, an unknown id.
+        let text = "[modules]
+order = [\"calendar\", \"qr_code\", \"timer\", \"settings\", \"zzz\", \"media\", \"clipboard\"]
+disabled = [\"settings\"]
+[modules.sizes]
+timer = \"wide\"
+media = \"large\"
+notes = \"small\"
+";
+        let (cfg, dropped) = lenient(text);
+        assert!(dropped.is_empty());
+        let m = &cfg.modules;
+        assert!(m.tabs.is_empty());
+        assert_eq!(m.last_tab, Tab::Home);
+        assert_eq!(m.sizes.get("timer"), Some(&TileSize::new(2, 1)));
+        assert_eq!(m.sizes.get("media"), Some(&TileSize::new(2, 2)));
+        assert_eq!(m.sizes.get("notes"), Some(&TileSize::new(1, 1)));
+        // Within a tab, the user's order.
+        assert_eq!(ids_in(&cfg, Tab::Home), ["calendar", "timer", "media"]);
+        assert_eq!(ids_in(&cfg, Tab::Tools), ["qr_code", "clipboard"]);
+        assert_eq!(ids_in(&cfg, Tab::System), ["settings", "zzz"]);
+        // Saved back, sizes are cols x rows.
+        let saved = toml::to_string_pretty(&cfg).expect("ser");
+        assert!(saved.contains("timer = \"2x1\""), "{saved}");
+        let back: Config = toml::from_str(&saved).expect("parse");
+        assert_eq!(back, cfg);
+    }
+
+    #[test]
+    fn tabs_and_the_last_tab_round_trip() {
+        let text = "[modules]
+last_tab = \"capture\"
+[modules.tabs]
+timer = \"system\"
+notes = \"nowhere\"
+";
+        let (cfg, dropped) = lenient(text);
+        assert_eq!(cfg.modules.last_tab, Tab::Capture);
+        assert_eq!(cfg.modules.tab_of("timer"), Tab::System);
+        // A bad tab is dropped on its own; the notes stay in Home.
+        assert_eq!(cfg.modules.tab_of("notes"), Tab::Home);
+        assert_eq!(dropped.len(), 1);
+        assert!(dropped[0].starts_with("modules.tabs.notes"));
     }
 
     #[test]

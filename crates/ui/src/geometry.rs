@@ -195,33 +195,82 @@ pub fn lerp(a: f32, b: f32, t: f32) -> f32 {
 // ---------------------------------------------------------------------------
 // Bento grid
 
-/// Tile footprint in grid cells (columns x rows).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum TileSize {
-    /// 1x1
-    Small,
-    /// 2x1
-    Wide,
-    /// 2x2
-    Large,
+/// Tile footprint in grid cells (columns x rows), 1x1 up to 6x4. Written in
+/// config as `"3x2"`; the old `small`/`wide`/`large` names read as 1x1, 2x1
+/// and 2x2.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct TileSize {
+    cols: u8,
+    rows: u8,
 }
 
+#[allow(non_upper_case_globals)]
 impl TileSize {
-    pub const ALL: [TileSize; 3] = [TileSize::Small, TileSize::Wide, TileSize::Large];
+    pub const MAX_COLS: usize = 6;
+    pub const MAX_ROWS: usize = 4;
+    /// 1x1
+    pub const Small: TileSize = TileSize { cols: 1, rows: 1 };
+    /// 2x1
+    pub const Wide: TileSize = TileSize { cols: 2, rows: 1 };
+    /// 2x2
+    pub const Large: TileSize = TileSize { cols: 2, rows: 2 };
 
-    pub fn cells(self) -> (usize, usize) {
-        match self {
-            TileSize::Small => (1, 1),
-            TileSize::Wide => (2, 1),
-            TileSize::Large => (2, 2),
+    /// A size of `cols` x `rows`, clamped to 1x1..=6x4.
+    pub fn new(cols: usize, rows: usize) -> Self {
+        Self {
+            cols: cols.clamp(1, Self::MAX_COLS) as u8,
+            rows: rows.clamp(1, Self::MAX_ROWS) as u8,
         }
     }
 
-    /// Cells covered; smaller means the tile has less room than another.
-    pub fn area(self) -> usize {
-        let (w, h) = self.cells();
-        w * h
+    pub fn cells(self) -> (usize, usize) {
+        (self.cols as usize, self.rows as usize)
+    }
+
+    /// Is this smaller than `needed` in either direction?
+    pub fn is_smaller_than(self, needed: TileSize) -> bool {
+        self.cols < needed.cols || self.rows < needed.rows
+    }
+}
+
+impl std::fmt::Display for TileSize {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}x{}", self.cols, self.rows)
+    }
+}
+
+impl std::str::FromStr for TileSize {
+    type Err = String;
+
+    fn from_str(s: &str) -> Result<Self, String> {
+        match s {
+            "small" => return Ok(Self::Small),
+            "wide" => return Ok(Self::Wide),
+            "large" => return Ok(Self::Large),
+            _ => {}
+        }
+        let bad = || format!("tile size `{s}` is not 1x1 to 6x4");
+        let (c, r) = s.split_once('x').ok_or_else(bad)?;
+        let c = c.parse::<usize>().map_err(|_| bad())?;
+        let r = r.parse::<usize>().map_err(|_| bad())?;
+        if (1..=Self::MAX_COLS).contains(&c) && (1..=Self::MAX_ROWS).contains(&r) {
+            Ok(Self::new(c, r))
+        } else {
+            Err(bad())
+        }
+    }
+}
+
+impl serde::Serialize for TileSize {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.collect_str(self)
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for TileSize {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let s = String::deserialize(d)?;
+        s.parse().map_err(serde::de::Error::custom)
     }
 }
 
@@ -262,16 +311,16 @@ pub struct Placement {
     pub row: usize,
 }
 
-/// Dense first-fit packing in column-major order (fill top-to-bottom, then
-/// left-to-right), so 2x2 tiles and 1x1 stacks interleave naturally in a wide,
-/// short panel. Tiles that do not fit are left out of the result.
+/// Dense first-fit packing in row-major order (fill left-to-right, then the
+/// next row), so a tab uses as few rows as it can. Tiles that do not fit are
+/// left out of the result.
 pub fn pack(spec: &GridSpec, sizes: &[TileSize]) -> Vec<Placement> {
     let mut used = vec![false; spec.columns * spec.rows];
     let mut out = Vec::with_capacity(sizes.len());
     for (index, size) in sizes.iter().enumerate() {
         let (w, h) = size.cells();
-        'search: for col in 0..spec.columns {
-            for row in 0..spec.rows {
+        'search: for row in 0..spec.rows {
+            for col in 0..spec.columns {
                 if col + w > spec.columns || row + h > spec.rows {
                     continue;
                 }
@@ -318,6 +367,17 @@ pub fn pack_pages(spec: &GridSpec, sizes: &[TileSize]) -> Vec<Vec<Placement>> {
         pages.push(Vec::new());
     }
     pages
+}
+
+/// Rows the tallest of `pages` reaches (at least 1).
+pub fn rows_used(pages: &[Vec<Placement>], sizes: &[TileSize]) -> usize {
+    pages
+        .iter()
+        .flatten()
+        .map(|p| p.row + sizes[p.index].cells().1)
+        .max()
+        .unwrap_or(0)
+        .max(1)
 }
 
 #[cfg(test)]
@@ -485,46 +545,68 @@ mod tests {
         }
     }
 
-    #[test]
-    fn packer_fills_a_three_row_grid() {
-        let spec = GridSpec {
-            columns: 8,
-            rows: 3,
-            cell: 60.0,
+    fn grid() -> GridSpec {
+        GridSpec {
+            columns: 6,
+            rows: 4,
+            cell: 80.0,
             gap: 8.0,
-        };
-        use TileSize::*;
+        }
+    }
+
+    fn at(index: usize, col: usize, row: usize) -> Placement {
+        Placement { index, col, row }
+    }
+
+    #[test]
+    fn packer_fills_rows_left_to_right() {
+        // Media 3x2 with four 1x1s: they fill beside it, then under it.
+        let media = TileSize::new(3, 2);
         let sizes = [
-            Large, Large, Wide, Small, Large, Wide, Small, Small, Small, Small, Small, Small, Small,
+            media,
+            TileSize::Small,
+            TileSize::Small,
+            TileSize::Small,
+            TileSize::Small,
         ];
-        let placed = pack(&spec, &sizes);
-        assert_eq!(placed.len(), sizes.len());
+        let placed = pack(&grid(), &sizes);
         assert_eq!(
-            placed[0],
-            Placement {
-                index: 0,
-                col: 0,
-                row: 0
-            }
+            placed,
+            [
+                at(0, 0, 0),
+                at(1, 3, 0),
+                at(2, 4, 0),
+                at(3, 5, 0),
+                at(4, 3, 1)
+            ]
         );
-        // Second 2x2 cannot sit under the first (only one row left), so it moves right.
-        assert_eq!(
-            placed[1],
-            Placement {
-                index: 1,
-                col: 2,
-                row: 0
-            }
-        );
-        // The wide tile fills the row below the first 2x2.
-        assert_eq!(
-            placed[2],
-            Placement {
-                index: 2,
-                col: 0,
-                row: 2
-            }
-        );
+        assert_eq!(rows_used(&[placed], &sizes), 2);
+    }
+
+    #[test]
+    fn a_full_grid_overflows_to_a_second_page() {
+        let sizes = [TileSize::new(6, 4), TileSize::Small, TileSize::new(2, 2)];
+        let pages = pack_pages(&grid(), &sizes);
+        assert_eq!(pages, [vec![at(0, 0, 0)], vec![at(1, 0, 0), at(2, 1, 0)]]);
+        assert_eq!(rows_used(&pages, &sizes), 4);
+        // Six wide tiles of 3x2 do not fit in one page: four do.
+        let sizes = [TileSize::new(3, 2); 5];
+        let pages = pack_pages(&grid(), &sizes);
+        assert_eq!(pages.iter().map(Vec::len).collect::<Vec<_>>(), [4, 1]);
+    }
+
+    #[test]
+    fn tile_sizes_parse_and_migrate() {
+        assert_eq!("small".parse(), Ok(TileSize::new(1, 1)));
+        assert_eq!("wide".parse(), Ok(TileSize::new(2, 1)));
+        assert_eq!("large".parse(), Ok(TileSize::new(2, 2)));
+        assert_eq!("6x4".parse(), Ok(TileSize::new(6, 4)));
+        for bad in ["7x1", "1x5", "0x2", "huge??", "2", "2x"] {
+            assert!(bad.parse::<TileSize>().is_err(), "{bad}");
+        }
+        assert_eq!(TileSize::new(3, 2).to_string(), "3x2");
+        assert!(TileSize::new(1, 4).is_smaller_than(TileSize::Large));
+        assert!(!TileSize::new(3, 2).is_smaller_than(TileSize::Large));
     }
 
     #[test]
@@ -548,15 +630,10 @@ mod tests {
 
     #[test]
     fn cell_rect_spans_gaps() {
-        let spec = GridSpec {
-            columns: 8,
-            rows: 3,
-            cell: 60.0,
-            gap: 8.0,
-        };
-        assert_eq!(spec.size(), vec2(536.0, 196.0));
+        let spec = grid();
+        assert_eq!(spec.size(), vec2(520.0, 344.0));
         let r = spec.cell_rect(Pos2::ZERO, 1, 1, TileSize::Large);
-        assert_eq!(r, Rect::from_min_size(pos2(68.0, 68.0), vec2(128.0, 128.0)));
+        assert_eq!(r, Rect::from_min_size(pos2(88.0, 88.0), vec2(168.0, 168.0)));
     }
 
     #[test]

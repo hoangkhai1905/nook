@@ -1,4 +1,4 @@
-//! Settings: the gear tile in the bento grid and the in-notch settings page.
+//! Settings: the in-notch settings page, opened by the gear in the tab bar.
 
 use crate::config::{AccentSource, Config, Material, MonitorMode, Renderer};
 use crate::update::{self, Status};
@@ -6,15 +6,11 @@ use egui::{
     Align, Align2, Area, Color32, Id, Layout, Order, Rect, Sense, Stroke, Ui, UiBuilder, pos2, vec2,
 };
 use nook_ui::bento::PANEL_PADDING;
-use nook_ui::module::{Module, TileCtx, TileSize};
 use nook_ui::shell::{ContentCtx, Placement};
 use nook_ui::theme::{
-    FALLBACK_ACCENT, SIZE_BODY, SIZE_ICON, SIZE_LABEL, Theme, ThemeMode, parse_hex, to_hex,
-    with_alpha,
+    FALLBACK_ACCENT, SIZE_BODY, SIZE_LABEL, Theme, ThemeMode, parse_hex, to_hex, with_alpha,
 };
-use nook_ui::{icons, paint, widgets};
-
-pub const SETTINGS_ID: &str = "settings";
+use nook_ui::{icons, widgets};
 
 const GAP: f32 = 8.0;
 const HEADER: f32 = 28.0;
@@ -79,48 +75,6 @@ const ACCENTS: [Option<Color32>; 7] = [
 /// Glass opacity slider range, in percent.
 const OPACITY_MIN: u8 = 40;
 const OPACITY_MAX: u8 = 100;
-
-/// The gear tile. Clicking it opens the settings page (handled by the app).
-pub struct SettingsTile;
-
-impl Module for SettingsTile {
-    fn id(&self) -> &'static str {
-        SETTINGS_ID
-    }
-
-    fn name(&self) -> &str {
-        "Settings"
-    }
-
-    fn icon(&self) -> &'static str {
-        icons::GEAR_SIX
-    }
-
-    fn size_hint(&self) -> TileSize {
-        TileSize::Small
-    }
-
-    fn can_hide(&self) -> bool {
-        false
-    }
-
-    fn ui_tile(&mut self, ui: &mut Ui, ctx: &mut TileCtx<'_>) {
-        let c = ui.max_rect().center();
-        let color = if ctx.hovered {
-            ctx.theme.text
-        } else {
-            ctx.theme.text_dim
-        };
-        paint::icon(
-            ui.painter(),
-            c,
-            icons::GEAR_SIX,
-            SIZE_ICON + 2.0,
-            color,
-            false,
-        );
-    }
-}
 
 #[derive(Default)]
 pub struct PageOutput {

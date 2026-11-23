@@ -339,6 +339,10 @@ impl Module for Notes {
         TileSize::Wide
     }
 
+    fn default_size(&self) -> TileSize {
+        TileSize::Small
+    }
+
     fn attach(&mut self, _ctx: &egui::Context) {
         self.dir = notes_dir();
         if let Some(dir) = &self.dir {
