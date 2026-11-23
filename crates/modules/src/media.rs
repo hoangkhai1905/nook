@@ -159,9 +159,13 @@ fn button_at(
     widgets::icon_button(&mut child, glyph, size, active, theme)
 }
 
+/// "m:ss", or "h:mm:ss" from an hour up (hours keep counting past a day).
 fn mmss(secs: f64) -> String {
     let s = secs.max(0.0) as u64;
-    format!("{}:{:02}", s / 60, s % 60)
+    match s / 3600 {
+        0 => format!("{}:{:02}", s / 60, s % 60),
+        h => format!("{h}:{:02}:{:02}", s / 60 % 60, s % 60),
+    }
 }
 
 /// Rounded image: a squircle-ish clip is overkill at this size, a rounded
@@ -589,5 +593,14 @@ mod tests {
         assert_eq!(remaining_label(10.4, 141.0), "-2:11");
         assert_eq!(remaining_label(141.0, 141.0), "-0:00");
         assert_eq!(remaining_label(200.0, 141.0), "-0:00");
+    }
+
+    #[test]
+    fn long_media_shows_hours() {
+        assert_eq!(mmss(59.0 * 60.0 + 59.0), "59:59");
+        assert_eq!(mmss(3600.0), "1:00:00");
+        assert_eq!(mmss(4.0 * 3600.0 + 3.0 * 60.0 + 54.0), "4:03:54");
+        // Two days of audio.
+        assert_eq!(mmss(48.0 * 3600.0), "48:00:00");
     }
 }
