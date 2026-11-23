@@ -796,10 +796,17 @@ impl NookApp {
             return;
         };
         for n in watcher.poll() {
-            if notifications::is_own(&n.app_id, &n.app_name)
-                || self.shell.state.is_open()
-                || !notifications::can_show_now()
-            {
+            let skip = if notifications::is_own(&n.app_id, &n.app_name) {
+                Some("own")
+            } else if self.shell.state.is_open() {
+                Some("panel open")
+            } else if !notifications::can_show_now() {
+                Some("quiet state")
+            } else {
+                None
+            };
+            if let Some(why) = skip {
+                tracing::debug!("notification from {} skipped: {why}", n.app_name);
                 continue;
             }
             tracing::debug!("notification from {}", n.app_name);
