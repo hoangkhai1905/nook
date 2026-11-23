@@ -23,6 +23,7 @@ mod shot_editor;
 mod snipper;
 pub mod stub;
 pub mod system_monitor;
+pub mod task_manager;
 pub mod text_extractor;
 pub mod timer;
 pub mod voice_memo;
@@ -50,6 +51,7 @@ pub const DEFAULT_ORDER: &[&str] = &[
     "draw",
     "voice_memo",
     "system_monitor",
+    "task_manager",
     "wallpaper",
     "phone_link",
     "plugins",
@@ -84,6 +86,7 @@ pub fn register_all(reg: &mut Registry) {
     reg.register(Box::<wallpaper::Wallpaper>::default());
     reg.register(Box::<calculator::Calculator>::default());
     reg.register(Box::<system_monitor::SystemMonitor>::default());
+    reg.register(Box::<task_manager::TaskManager>::default());
     reg.register(Box::<calendar::Calendar>::default());
     reg.register(Box::<quick_launch::QuickLaunch>::default());
     reg.register(Box::<qr_code::QrCodeModule>::default());

@@ -370,8 +370,16 @@ mod tests {
         );
         assert_eq!(
             ids_in(&cfg, Tab::System),
-            ["system_monitor", "wallpaper", "phone_link", "plugins"]
+            [
+                "system_monitor",
+                "task_manager",
+                "wallpaper",
+                "phone_link",
+                "plugins"
+            ]
         );
+        // A module missing from an existing config's order lands in System.
+        assert_eq!(cfg.modules.tab_of("task_manager"), Tab::System);
         // Not listed anywhere (a new plugin): System, until the user moves it.
         assert_eq!(cfg.modules.tab_of("plugin:new"), Tab::System);
         let mut cfg = cfg;
