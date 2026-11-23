@@ -797,6 +797,8 @@ impl NookApp {
                 continue;
             }
             tracing::debug!("notification from {}", n.app_name);
+            theme::ensure_cjk(ctx, &n.title);
+            theme::ensure_cjk(ctx, &n.body);
             let icon = n.icon.as_ref().map(|art| {
                 let image = egui::ColorImage::from_rgba_unmultiplied(
                     [art.width, art.height],
@@ -1020,7 +1022,7 @@ fn draw_pill(badges: Vec<Badge>, battery: Option<Battery>, ui: &mut Ui, rect: Re
     let media = media_badge(&badges);
     if media.is_some() {
         right = paint_bars(painter, right, cy, now, theme.text) - 8.0;
-        ui.ctx().request_repaint_after(Duration::from_millis(33));
+        ui.ctx().request_repaint_after(Duration::from_millis(66));
     }
 
     // Right: live glyphs (coffee, phone pulse...), otherwise battery or date.

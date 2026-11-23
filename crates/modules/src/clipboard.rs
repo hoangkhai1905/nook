@@ -98,6 +98,7 @@ pub struct Clipboard {
     /// Entry last copied back, and when (egui time).
     copied: Option<(u64, f64)>,
     open_page: bool,
+    ctx: Option<egui::Context>,
 }
 
 impl Clipboard {
@@ -202,6 +203,7 @@ impl Module for Clipboard {
     }
 
     fn attach(&mut self, ctx: &egui::Context) {
+        self.ctx = Some(ctx.clone());
         let ctx = ctx.clone();
         match ClipboardWatcher::spawn(move || ctx.request_repaint()) {
             Ok(w) => self.watcher = Some(w),
@@ -214,6 +216,9 @@ impl Module for Clipboard {
             return;
         };
         for content in w.poll() {
+            if let (Some(ctx), ClipContent::Text(t)) = (&self.ctx, &content) {
+                nook_ui::theme::ensure_cjk(ctx, t);
+            }
             self.history.push(content);
         }
     }

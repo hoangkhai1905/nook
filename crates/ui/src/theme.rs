@@ -6,6 +6,7 @@ use material_colors::hct::Hct;
 use material_colors::scheme::Scheme;
 use material_colors::scheme::variant::SchemeTonalSpot;
 use serde::{Deserialize, Serialize};
+use std::sync::atomic::{AtomicBool, Ordering};
 
 /// Fallback accent when no wallpaper color is available: electric violet.
 pub const FALLBACK_ACCENT: Color32 = Color32::from_rgb(0x7C, 0x5C, 0xFF);
@@ -289,6 +290,34 @@ pub fn to_hex(c: Color32) -> String {
 /// proportional and egui cannot switch on `tnum`, so ticking text goes
 /// through `paint::digit_slots`. egui's bundled font stays as a fallback.
 pub fn install_fonts(ctx: &egui::Context) {
+    ctx.set_fonts(definitions(false));
+}
+
+/// Set once the Chinese/Japanese/Korean fallback fonts are installed.
+static CJK_LOADED: AtomicBool = AtomicBool::new(false);
+
+/// Whether `c` needs the CJK fallback fonts (Han, kana, Hangul, CJK and
+/// fullwidth punctuation).
+fn is_cjk(c: char) -> bool {
+    matches!(c as u32,
+        0x1100..=0x11FF | 0x2E80..=0x30FF | 0x3130..=0x318F | 0x31F0..=0x4DBF
+        | 0x4E00..=0x9FFF | 0xAC00..=0xD7AF | 0xF900..=0xFAFF | 0xFF00..=0xFFEF
+        | 0x20000..=0x2FFFF)
+}
+
+/// Installs the CJK fallback fonts (~23 MB, read from the Windows fonts
+/// folder) the first time `text` needs them. Cheap and idempotent: call it
+/// wherever a title, notification or copied text enters the UI.
+pub fn ensure_cjk(ctx: &egui::Context, text: &str) {
+    if !CJK_LOADED.load(Ordering::Relaxed)
+        && text.chars().any(is_cjk)
+        && !CJK_LOADED.swap(true, Ordering::Relaxed)
+    {
+        ctx.set_fonts(definitions(true));
+    }
+}
+
+fn definitions(cjk: bool) -> FontDefinitions {
     const GSF: &[u8] = include_bytes!("../assets/fonts/GoogleSansFlex.ttf");
     let mut fonts = FontDefinitions::default();
     let weight = |w: f32| {
@@ -302,10 +331,12 @@ pub fn install_fonts(ctx: &egui::Context) {
     proportional.insert(0, "gsf".into());
     // Chinese/Japanese and Korean titles (songs, notifications) fall back to
     // the Windows fonts when present.
-    // ponytail: the files are read whole (~23 MB resident); load lazily if
-    // memory matters.
+    // Read whole (~23 MB resident), so only once `ensure_cjk` asks.
     let windir = std::env::var("WINDIR").unwrap_or_else(|_| "C:\\Windows".into());
     for (name, file) in [("cjk-zh", "msyh.ttc"), ("cjk-ko", "malgun.ttf")] {
+        if !cjk {
+            break;
+        }
         if let Ok(bytes) = std::fs::read(format!("{windir}\\Fonts\\{file}")) {
             fonts
                 .font_data
@@ -325,12 +356,20 @@ pub fn install_fonts(ctx: &egui::Context) {
         FAMILY_ICON_FILL,
         egui_phosphor::Variant::Fill.font_bytes(),
     );
-    ctx.set_fonts(fonts);
+    fonts
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn cjk_detection() {
+        assert!(!"Daft Punk - Around the World é ñ — …".chars().any(is_cjk));
+        assert!("周杰倫".chars().any(is_cjk));
+        assert!("ありがとう".chars().any(is_cjk));
+        assert!("안녕".chars().any(is_cjk));
+    }
 
     #[test]
     fn hex_round_trip() {

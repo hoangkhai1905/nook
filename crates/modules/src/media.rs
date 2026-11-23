@@ -325,6 +325,10 @@ impl Module for Media {
     fn on_tick(&mut self) {
         if let Some(snapshot) = self.watcher.as_ref().and_then(MediaWatcher::poll) {
             self.now = snapshot;
+            if let (Some(ctx), Some(n)) = (&self.ctx, &self.now) {
+                nook_ui::theme::ensure_cjk(ctx, &n.title);
+                nook_ui::theme::ensure_cjk(ctx, &n.artist);
+            }
             if self.now.as_ref().and_then(|n| n.art.as_ref()).is_none() {
                 self.art = None;
             } else if let Some(ctx) = self.ctx.clone() {
