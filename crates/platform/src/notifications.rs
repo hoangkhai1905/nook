@@ -21,7 +21,8 @@ use windows::UI::Notifications::Management::{
 use windows::UI::Notifications::{KnownNotificationBindings, NotificationKinds, UserNotification};
 use windows::Win32::System::WinRT::{RO_INIT_MULTITHREADED, RoInitialize};
 use windows::Win32::UI::Shell::{
-    QUERY_USER_NOTIFICATION_STATE, QUNS_ACCEPTS_NOTIFICATIONS, SHQueryUserNotificationState,
+    QUERY_USER_NOTIFICATION_STATE, QUNS_ACCEPTS_NOTIFICATIONS, QUNS_BUSY,
+    QUNS_RUNNING_D3D_FULL_SCREEN, SHQueryUserNotificationState,
 };
 use windows::core::Interface;
 
@@ -310,10 +311,12 @@ impl Seen {
     }
 }
 
-/// Whether the shell state allows showing a notification: only when it would
-/// itself show a toast (not fullscreen, presentation, Do Not Disturb/Focus).
+/// Whether the shell state allows showing a notification: not during a
+/// presentation, Do Not Disturb/Focus, or with the user away.
 pub fn accepts(state: QUERY_USER_NOTIFICATION_STATE) -> bool {
-    state == QUNS_ACCEPTS_NOTIFICATIONS
+    // A fullscreen app or game (busy / D3D fullscreen) still gets the card;
+    // presentation mode and quiet hours do not.
+    [QUNS_ACCEPTS_NOTIFICATIONS, QUNS_BUSY, QUNS_RUNNING_D3D_FULL_SCREEN].contains(&state)
 }
 
 /// [`accepts`] for the system right now; shown when the query fails.
@@ -416,15 +419,15 @@ mod tests {
     }
 
     #[test]
-    fn only_a_quiet_desktop_shows_notifications() {
-        assert!(accepts(QUNS_ACCEPTS_NOTIFICATIONS));
+    fn fullscreen_apps_still_get_notifications() {
         for s in [
-            QUNS_NOT_PRESENT,
+            QUNS_ACCEPTS_NOTIFICATIONS,
             QUNS_BUSY,
             QUNS_RUNNING_D3D_FULL_SCREEN,
-            QUNS_PRESENTATION_MODE,
-            QUNS_QUIET_TIME,
         ] {
+            assert!(accepts(s), "{s:?}");
+        }
+        for s in [QUNS_NOT_PRESENT, QUNS_PRESENTATION_MODE, QUNS_QUIET_TIME] {
             assert!(!accepts(s), "{s:?}");
         }
     }

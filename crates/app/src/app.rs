@@ -1636,9 +1636,9 @@ impl eframe::App for NookApp {
         if let Some(at) = self.notices.tick(t, self.notice_hover) {
             ctx.request_repaint_after_secs(((at - t).max(0.0)) as f32 + 0.01);
         }
-        // The card grows out of the closed pill; over a fullscreen app or an
-        // open panel the one-line pill stays.
-        let as_card = !self.sys.fullscreen && !self.shell.state.is_open();
+        // The card grows out of the closed pill, over a fullscreen app too;
+        // with the panel open the one-line pill stays.
+        let as_card = !self.shell.state.is_open();
         let notice = self.notices.current().map(|toast| NoticeView {
             icon: toast.icon.as_ref().map(egui::TextureHandle::id),
             line: notify::line(&toast.n, self.cfg.show_notification_text),
@@ -1707,7 +1707,10 @@ impl eframe::App for NookApp {
         if let Some(at) = self.reveal.wake_at() {
             ctx.request_repaint_after_secs((at - now).max(0.0) as f32 + 0.001);
         }
-        let hidden = fullscreen_hidden && !revealed;
+        // A notification card drops down over a fullscreen app for its hold,
+        // then the notch hides again.
+        let card_up = notice.as_ref().is_some_and(|v| v.card.is_some());
+        let hidden = fullscreen_hidden && !revealed && !card_up;
 
         let mut clicked = None;
         let mut page_request = None;
