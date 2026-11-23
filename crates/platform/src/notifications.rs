@@ -164,17 +164,23 @@ fn fetch(listener: &Listener, seen: &mut Seen) -> Result<Vec<Notification>> {
         .join()
         .api("GetNotificationsAsync.join")?;
     let items: Vec<UserNotification> = items.into_iter().collect();
-    let ids: Vec<u32> = items.iter().map(|n| n.Id().unwrap_or_default()).collect();
+    let keys: Vec<Key> = items
+        .iter()
+        .map(|n| {
+            let id = n.Id().unwrap_or_default();
+            let created = n
+                .CreationTime()
+                .map(|t| t.UniversalTime)
+                .unwrap_or_default();
+            (id, created)
+        })
+        .collect();
     let mut fresh: Vec<(i64, Notification)> = Vec::new();
-    for i in seen.fresh(&ids) {
-        let n = &items[i];
-        let created = n
-            .CreationTime()
-            .map(|t| t.UniversalTime)
-            .unwrap_or_default();
-        match read(n) {
+    for i in seen.fresh(&keys) {
+        let (id, created) = keys[i];
+        match read(&items[i]) {
             Ok(n) => fresh.push((created, n)),
-            Err(e) => tracing::debug!("notification {}: {e}", ids[i]),
+            Err(e) => tracing::debug!("notification {id}: {e}"),
         }
     }
     fresh.sort_by_key(|(created, _)| *created);
@@ -286,18 +292,23 @@ pub fn split_texts(texts: Vec<String>) -> Texts {
     }
 }
 
-/// Which notification ids are new since the last look.
+/// A toast as the listener lists it: its id and creation time. An app that
+/// replaces its toast (Discord, one per channel) keeps the id, but the
+/// creation time changes, so the new message is news.
+type Key = (u32, i64);
+
+/// Which notifications are new since the last look.
 #[derive(Default)]
 struct Seen {
-    ids: HashSet<u32>,
+    ids: HashSet<Key>,
     primed: bool,
 }
 
 impl Seen {
-    /// Indices into `current` of ids not seen before. The first call only
+    /// Indices into `current` of keys not seen before. The first call only
     /// records what is already there (toasts from before startup are not
-    /// news); later calls forget ids that went away.
-    fn fresh(&mut self, current: &[u32]) -> Vec<usize> {
+    /// news); later calls forget keys that went away.
+    fn fresh(&mut self, current: &[Key]) -> Vec<usize> {
         let first = !self.primed;
         self.primed = true;
         let new = current
@@ -384,16 +395,33 @@ mod tests {
         QUNS_RUNNING_D3D_FULL_SCREEN,
     };
 
+    /// Keys created at time 0.
+    fn k(ids: &[u32]) -> Vec<Key> {
+        ids.iter().map(|&id| (id, 0)).collect()
+    }
+
     #[test]
     fn startup_snapshot_is_not_news_but_later_arrivals_are() {
         let mut seen = Seen::default();
-        assert!(seen.fresh(&[1, 2, 3]).is_empty(), "already there at start");
-        assert!(seen.fresh(&[1, 2, 3]).is_empty(), "nothing changed");
-        assert_eq!(seen.fresh(&[1, 2, 3, 7, 5]), vec![3, 4]);
-        assert!(seen.fresh(&[1, 2, 3, 7, 5]).is_empty(), "reported once");
+        assert!(
+            seen.fresh(&k(&[1, 2, 3])).is_empty(),
+            "already there at start"
+        );
+        assert!(seen.fresh(&k(&[1, 2, 3])).is_empty(), "nothing changed");
+        assert_eq!(seen.fresh(&k(&[1, 2, 3, 7, 5])), vec![3, 4]);
+        assert!(seen.fresh(&k(&[1, 2, 3, 7, 5])).is_empty(), "reported once");
         // Dismissed ones go away without being news.
-        assert!(seen.fresh(&[7]).is_empty());
-        assert_eq!(seen.fresh(&[7, 8]), vec![1]);
+        assert!(seen.fresh(&k(&[7])).is_empty());
+        assert_eq!(seen.fresh(&k(&[7, 8])), vec![1]);
+    }
+
+    #[test]
+    fn a_replaced_toast_with_the_same_id_is_news() {
+        // Discord replaces its toast for a channel: same id, new time.
+        let mut seen = Seen::default();
+        assert!(seen.fresh(&[(9, 100)]).is_empty());
+        assert_eq!(seen.fresh(&[(9, 200)]), vec![0]);
+        assert!(seen.fresh(&[(9, 200)]).is_empty(), "reported once");
     }
 
     #[test]
@@ -412,7 +440,7 @@ mod tests {
     fn empty_start_then_first_arrival_is_news() {
         let mut seen = Seen::default();
         assert!(seen.fresh(&[]).is_empty());
-        assert_eq!(seen.fresh(&[4]), vec![0]);
+        assert_eq!(seen.fresh(&k(&[4])), vec![0]);
     }
 
     #[test]
