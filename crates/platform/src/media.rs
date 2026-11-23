@@ -206,11 +206,20 @@ fn run(
             Ok(())
         }))
         .api("CurrentSessionChanged")?;
+    // An app opening or closing its session may change who is shown even
+    // when Windows' current session does not.
+    let w = wake.clone();
+    manager
+        .SessionsChanged(&TypedEventHandler::new(move |_, _| {
+            let _ = w.send(Msg::Wake);
+            Ok(())
+        }))
+        .api("SessionsChanged")?;
 
     let mut watched: Option<Watched> = None;
     let mut art: Option<(ArtKey, Option<Arc<Art>>)> = None;
     loop {
-        let session = manager.GetCurrentSession().ok();
+        let session = active_session(&manager);
         let id = session
             .as_ref()
             .and_then(|s| s.SourceAppUserModelId().ok())
@@ -254,6 +263,33 @@ fn run(
             Err(RecvTimeoutError::Timeout) => {}
             Err(RecvTimeoutError::Disconnected) => return Ok(()),
         }
+    }
+}
+
+/// The session to show: Windows' current one unless it is paused while
+/// another app plays (see [`pick_session`]).
+fn active_session(manager: &Manager) -> Option<Session> {
+    let current = manager.GetCurrentSession().ok();
+    let Ok(all) = manager.GetSessions() else {
+        return current;
+    };
+    let all: Vec<Session> = all.into_iter().collect();
+    let playing: Vec<bool> = all
+        .iter()
+        .map(|s| {
+            s.GetPlaybackInfo()
+                .and_then(|i| i.PlaybackStatus())
+                .is_ok_and(|st| st == Status::Playing)
+        })
+        .collect();
+    let id_of = |s: &Session| s.SourceAppUserModelId().ok().map(|h| h.to_string());
+    let current_id = current.as_ref().and_then(id_of);
+    let cur_idx = current_id
+        .as_ref()
+        .and_then(|c| all.iter().position(|s| id_of(s).as_ref() == Some(c)));
+    match pick_session(&playing, cur_idx) {
+        Some(i) => all.into_iter().nth(i),
+        None => current,
     }
 }
 
@@ -405,8 +441,13 @@ pub fn clean_source(id: &str) -> String {
     let name = id.rsplit('!').next().unwrap_or(id);
     let name = name.strip_suffix(".exe").unwrap_or(name);
     let name = name.rsplit(['\\', '/']).next().unwrap_or(name);
-    let hex = name.chars().filter(char::is_ascii_hexdigit).count();
-    if name.len() >= 8 && hex * 3 >= name.len() * 2 {
+    // Only hex digits (and GUID punctuation): "foobar2000" is mostly hex
+    // by count yet a real name.
+    if name.len() >= 8
+        && name
+            .chars()
+            .all(|c| c.is_ascii_hexdigit() || matches!(c, '-' | '{' | '}'))
+    {
         return String::new();
     }
     name.to_owned()
@@ -417,11 +458,52 @@ pub fn clean_source(id: &str) -> String {
 /// the window's executable name matches the cleaned id ("msedge" for
 /// "MSEdge" or "msedge.exe").
 fn app_matches(app_id: &str, explicit: Option<&str>, exe_stem: Option<&str>) -> bool {
-    if explicit.is_some_and(|e| e.eq_ignore_ascii_case(app_id)) {
+    if explicit.is_some_and(|e| e.eq_ignore_ascii_case(app_id) || same_package(app_id, e)) {
         return true;
     }
     let name = clean_source(app_id);
     !name.is_empty() && exe_stem.is_some_and(|s| s.eq_ignore_ascii_case(&name))
+}
+
+/// Both are packaged ids ("Family!App") of the same package family: the
+/// Media Player's session says "Microsoft.ZuneMusic_8wekyb3d8bbwe!Microsoft.ZuneMusic"
+/// while its window may carry another entry of the package, and its exe
+/// ("Microsoft.Media.Player") bears no resemblance to either.
+fn same_package(a: &str, b: &str) -> bool {
+    match (a.split_once('!'), b.split_once('!')) {
+        (Some((x, _)), Some((y, _))) => x.eq_ignore_ascii_case(y),
+        _ => false,
+    }
+}
+
+/// Executables of browsers whose tabs are searched through UI Automation
+/// (Chromium forks expose the same tab strip as Edge; Firefox its own).
+/// Other apps are never scanned: walking an Electron app's tree through UI
+/// Automation switches its accessibility mode on for nothing.
+fn is_browser(exe_stem: &str) -> bool {
+    const BROWSERS: [&str; 10] = [
+        "chrome",
+        "msedge",
+        "brave",
+        "opera",
+        "vivaldi",
+        "firefox",
+        "chromium",
+        "arc",
+        "librewolf",
+        "waterfox",
+    ];
+    BROWSERS.iter().any(|b| exe_stem.eq_ignore_ascii_case(b))
+}
+
+/// Index of the session to show: the current one (Windows' own idea of the
+/// active session, which follows the most recent playback) if it is playing,
+/// else the first playing one, else the current one.
+fn pick_session(playing: &[bool], current: Option<usize>) -> Option<usize> {
+    match current {
+        Some(c) if playing.get(c) == Some(&true) => Some(c),
+        _ => playing.iter().position(|&p| p).or(current),
+    }
 }
 
 /// Index of the window to focus among `(belongs to the app, title)`
@@ -466,7 +548,13 @@ fn select_tab(uia: &IUIAutomation, hwnd: HWND, hints: &[&str]) -> windows::core:
             UIA_ControlTypePropertyId,
             &VARIANT::from(UIA_TabItemControlTypeId.0),
         )?;
-        let tabs = root.FindAll(TreeScope_Descendants, &cond)?;
+        let mut tabs = root.FindAll(TreeScope_Descendants, &cond)?;
+        if tabs.Length()? == 0 {
+            // Chromium builds its accessibility tree on the first UI
+            // Automation request; give it a moment, then ask again.
+            std::thread::sleep(Duration::from_millis(300));
+            tabs = root.FindAll(TreeScope_Descendants, &cond)?;
+        }
         let n = tabs.Length()?;
         let mut names = Vec::new();
         for i in 0..n {
@@ -507,15 +595,16 @@ pub fn focus_app(app_id: &str, hints: &[&str]) -> Result<bool> {
     let mut found: Vec<(HWND, String)> = Vec::new();
     // SAFETY: the callback only runs during the call and `found` outlives it.
     unsafe { EnumWindows(Some(collect), LPARAM(&raw mut found as isize)) }.api("EnumWindows")?;
+    // Per window: belongs to the app, and is a browser window.
+    let mut flags: Vec<(bool, bool)> = Vec::with_capacity(found.len());
     let candidates: Vec<(bool, String)> = found
         .iter()
         .map(|(h, t)| {
             let explicit = explicit_app_id(*h);
             let stem = exe_stem(*h);
-            (
-                app_matches(app_id, explicit.as_deref(), stem.as_deref()),
-                t.clone(),
-            )
+            let mine = app_matches(app_id, explicit.as_deref(), stem.as_deref());
+            flags.push((mine, mine && stem.as_deref().is_some_and(is_browser)));
+            (mine, t.clone())
         })
         .collect();
     let Some(fallback) = pick_window(&candidates, hints) else {
@@ -524,14 +613,18 @@ pub fn focus_app(app_id: &str, hints: &[&str]) -> Result<bool> {
     // HWND isn't Send; the thread gets raw values.
     let app_windows: Vec<isize> = found
         .iter()
-        .zip(&candidates)
-        .filter(|(_, c)| c.0)
+        .zip(&flags)
+        .filter(|(_, f)| f.1)
         .map(|((h, _), _)| h.0 as isize)
         .collect();
     let fallback = found[fallback].0.0 as isize;
     let hints: Vec<String> = hints.iter().map(|h| (*h).to_owned()).collect();
     std::thread::spawn(move || {
-        let target = select_hinted_tab(&app_windows, &hints).unwrap_or(fallback);
+        let target = if app_windows.is_empty() {
+            fallback
+        } else {
+            select_hinted_tab(&app_windows, &hints).unwrap_or(fallback)
+        };
         let hwnd = HWND(target as *mut _);
         // SAFETY: plain calls; stale handles just fail.
         unsafe {
@@ -678,6 +771,56 @@ mod tests {
     }
 
     #[test]
+    fn packaged_and_classic_apps_match() {
+        // Windows Media Player: packaged, exe name unrelated to the id.
+        let zune = "Microsoft.ZuneMusic_8wekyb3d8bbwe!Microsoft.ZuneMusic";
+        assert!(app_matches(
+            zune,
+            Some("Microsoft.ZuneMusic_8wekyb3d8bbwe!App"),
+            Some("Microsoft.Media.Player")
+        ));
+        assert!(!app_matches(
+            zune,
+            Some("Other.Pkg_abc!App"),
+            Some("Microsoft.Media.Player")
+        ));
+        // Classic ids are exe names; the window's exe matches.
+        assert!(app_matches("Spotify.exe", None, Some("Spotify")));
+        assert!(app_matches("vlc.exe", None, Some("vlc")));
+        assert!(app_matches("foobar2000.exe", None, Some("foobar2000")));
+        // Firefox: an opaque hash id, matched through the window's own.
+        assert!(app_matches(
+            "308046B0AF4A39CB",
+            Some("308046B0AF4A39CB"),
+            Some("firefox")
+        ));
+    }
+
+    #[test]
+    fn only_browsers_are_scanned_for_tabs() {
+        for b in ["chrome", "MSEdge", "brave", "opera", "vivaldi", "firefox"] {
+            assert!(is_browser(b), "{b}");
+        }
+        for n in ["Spotify", "vlc", "foobar2000", "Microsoft.Media.Player"] {
+            assert!(!is_browser(n), "{n}");
+        }
+    }
+
+    #[test]
+    fn session_choice() {
+        // The current session wins while it plays.
+        assert_eq!(pick_session(&[true, true], Some(1)), Some(1));
+        // Paused current, another plays: show the player.
+        assert_eq!(pick_session(&[false, true], Some(0)), Some(1));
+        // Nothing plays: stay on the current one.
+        assert_eq!(pick_session(&[false, false], Some(1)), Some(1));
+        // No current but something plays.
+        assert_eq!(pick_session(&[false, true], None), Some(1));
+        assert_eq!(pick_session(&[false], None), None);
+        assert_eq!(pick_session(&[], None), None);
+    }
+
+    #[test]
     fn window_choice() {
         let c = |a: bool, t: &str| (a, t.to_owned());
         let wins = [
@@ -703,6 +846,7 @@ mod tests {
         assert_eq!(clean_source("chrome.exe"), "chrome");
         assert_eq!(clean_source("C:\\Apps\\foo.exe"), "foo");
         assert_eq!(clean_source("F0DC299D809B9700"), "");
+        assert_eq!(clean_source("foobar2000.exe"), "foobar2000");
     }
 
     #[test]

@@ -13,7 +13,7 @@ use egui::{
     Align2, Color32, ColorImage, Pos2, Rect, Response, Sense, TextureHandle, TextureOptions, Ui,
     UiBuilder, pos2, vec2,
 };
-use nook_platform::media::{self, MediaCommand, MediaWatcher, NowPlaying};
+use nook_platform::media::{MediaCommand, MediaWatcher, NowPlaying};
 use nook_ui::module::{Badge, Module, TileCtx, TileSize};
 use nook_ui::theme::{SIZE_BODY, SIZE_LABEL, TILE_PADDING, Theme, with_alpha};
 use nook_ui::{icons, paint, widgets};
@@ -124,9 +124,9 @@ impl Media {
             .interact(area, ui.id().with("media-open"), Sense::click())
             .on_hover_cursor(egui::CursorIcon::PointingHand);
         if open.clicked() {
-            match media::focus_app(&now.app_id, &[&now.title]) {
-                Ok(true) => self.close = true,
-                Ok(false) => tracing::debug!("media: no window for {}", now.app_id),
+            // An app with no window (minimised to the tray) is launched.
+            match nook_platform::notifications::bring_forward(&now.app_id, &[&now.title]) {
+                Ok(()) => self.close = true,
                 Err(e) => tracing::debug!("media: focusing {}: {e}", now.app_id),
             }
         }

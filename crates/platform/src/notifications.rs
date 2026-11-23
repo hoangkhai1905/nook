@@ -316,7 +316,12 @@ impl Seen {
 pub fn accepts(state: QUERY_USER_NOTIFICATION_STATE) -> bool {
     // A fullscreen app or game (busy / D3D fullscreen) still gets the card;
     // presentation mode and quiet hours do not.
-    [QUNS_ACCEPTS_NOTIFICATIONS, QUNS_BUSY, QUNS_RUNNING_D3D_FULL_SCREEN].contains(&state)
+    [
+        QUNS_ACCEPTS_NOTIFICATIONS,
+        QUNS_BUSY,
+        QUNS_RUNNING_D3D_FULL_SCREEN,
+    ]
+    .contains(&state)
 }
 
 /// [`accepts`] for the system right now; shown when the query fails.
@@ -342,6 +347,11 @@ fn valid_aumid(id: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || "._!-{}\\".contains(c))
 }
 
+/// A bare executable name ("vlc.exe"): no path, no package id.
+fn is_plain_exe(id: &str) -> bool {
+    id.len() > 4 && id.to_ascii_lowercase().ends_with(".exe") && !id.contains(['\\', '/', '!', ':'])
+}
+
 /// Brings the notification's app forward (selecting the tab matching `hints`
 /// in a browser); an app without a window is launched from its AppUserModelID.
 pub fn bring_forward(app_id: &str, hints: &[&str]) -> Result<()> {
@@ -352,6 +362,11 @@ pub fn bring_forward(app_id: &str, hints: &[&str]) -> Result<()> {
         return Err(PlatformError::Other(
             "no window and no launchable id".into(),
         ));
+    }
+    // Classic apps report their exe name ("Spotify.exe"), which is no
+    // AppsFolder entry; the shell finds those through App Paths / PATH.
+    if is_plain_exe(app_id) {
+        return crate::shell::open(app_id);
     }
     // One argument, no shell: the id cannot inject anything.
     std::process::Command::new("explorer.exe")
@@ -379,6 +394,18 @@ mod tests {
         // Dismissed ones go away without being news.
         assert!(seen.fresh(&[7]).is_empty());
         assert_eq!(seen.fresh(&[7, 8]), vec![1]);
+    }
+
+    #[test]
+    fn plain_exe_ids_launch_through_the_shell() {
+        assert!(is_plain_exe("Spotify.exe"));
+        assert!(is_plain_exe("vlc.EXE"));
+        assert!(!is_plain_exe(".exe"));
+        assert!(!is_plain_exe("C:\\Apps\\foo.exe"));
+        assert!(!is_plain_exe(
+            "Microsoft.ZuneMusic_8wekyb3d8bbwe!Microsoft.ZuneMusic"
+        ));
+        assert!(!is_plain_exe("MSEdge"));
     }
 
     #[test]

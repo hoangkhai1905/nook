@@ -517,8 +517,14 @@ impl NookApp {
         let Some(mon) = self.sys.monitor else {
             return;
         };
-        let scale = window::dpi(self.hwnd) as f32 / 96.0;
-        let h = (self.shell.window_size().y * scale).ceil() as i32;
+        // Cursor mode: an open (or pinned) panel stays where it is when the
+        // pointer wanders to another monitor; it follows once it closes.
+        if self.shell.state.is_open()
+            && nook_platform::monitor::of_window(self.hwnd).is_ok_and(|cur| cur.id != mon.id)
+        {
+            return;
+        }
+        let h = points_to_px(self.shell.window_size().y, window::dpi(self.hwnd));
         let rect = (mon.work.left, mon.work.top, mon.work.width(), h);
         if self.anchor != Some(rect) {
             match window::set_rect(self.hwnd, rect.0, rect.1, rect.2, rect.3) {
@@ -1988,9 +1994,25 @@ impl eframe::App for NookApp {
     }
 }
 
+/// Logical points to physical pixels at `dpi` (96 = 100 %), rounded up so
+/// the window never cuts the shape off.
+fn points_to_px(points: f32, dpi: u32) -> i32 {
+    (points * dpi as f32 / 96.0).ceil() as i32
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn window_height_rounds_up_at_every_scale() {
+        // 100/125/150/175/200 % of a 96-DPI base.
+        for (dpi, want) in [(96, 100), (120, 125), (144, 150), (168, 175), (192, 200)] {
+            assert_eq!(points_to_px(100.0, dpi), want, "{dpi} dpi");
+        }
+        // Fractions never cut the shape off.
+        assert_eq!(points_to_px(100.4, 120), 126);
+    }
 
     #[test]
     fn media_pill_fits_short_titles_and_caps_long_ones() {
