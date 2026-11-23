@@ -751,8 +751,8 @@ impl NookApp {
     fn page_size(&self, ctx: &egui::Context) -> Option<egui::Vec2> {
         let m = self.shell.metrics;
         let want = match self.page {
-            // The panel is as tall as the tab's rows (never under the
-            // regular height, see below); it springs when the tab changes.
+            // The panel is as tall as the tab's rows; it springs when the
+            // tab changes.
             Page::Bento => {
                 let tab = self.cfg.modules.last_tab;
                 let sizes = self.registry.tab_sizes(tab, self.editing);
@@ -771,7 +771,13 @@ impl NookApp {
             let room_x = mon.work.width() as f32 / ppp - 2.0 * m.side_margin - 24.0;
             vec2(want.x.min(room_x), want.y.min(room_y))
         });
-        Some(fit.max(m.expanded))
+        // The grid may be shorter than the regular panel.
+        let min_y = if self.page == Page::Bento {
+            0.0
+        } else {
+            m.expanded.y
+        };
+        Some(vec2(fit.x.max(m.expanded.x), fit.y.max(min_y)))
     }
 
     /// Puts plugin installs, updates and removals into effect while Nook

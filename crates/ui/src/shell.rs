@@ -342,13 +342,14 @@ impl Shell {
         // Progress is measured against the regular panel, so a taller page
         // reads as fully open (1.0) instead of re-running the morph.
         let base = self.collapsed().y;
-        let mut progress = ((h - base) / (m.expanded.y - base)).max(0.0);
-        if expanded.y > m.expanded.y {
+        let full = expanded.y.min(m.expanded.y);
+        let mut progress = ((h - base) / (full - base)).max(0.0);
+        if expanded.y != m.expanded.y {
             progress = progress.min(1.0);
         }
         // Grow the window at once; shrink it once the shape has come down.
-        if expanded.y >= self.tall || h <= expanded.y.max(m.expanded.y) + 0.5 {
-            self.tall = expanded.y.max(m.expanded.y);
+        if expanded.y >= self.tall || h <= expanded.y + 0.5 {
+            self.tall = expanded.y;
         }
 
         // Horizontal anchor; a new placement springs across the top edge.

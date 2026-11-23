@@ -10,9 +10,9 @@
 //! name to move it there, drag the handle in its corner to resize it, and
 //! the tick under its icon shows or hides it. **Expanding**: a tile made
 //! smaller than its content needs draws a compact face, and a click opens
-//! it: the grid repacks with it at full size, so it grows in place while its
-//! neighbours glide out of the way. A click anywhere else (or Esc) folds it
-//! back.
+//! it as a card floating over the grid at the module's full size, springing
+//! out of the tile (the other tiles stay put). A click anywhere else (or Esc)
+//! folds it back.
 
 use crate::anim;
 use crate::geometry::{GridSpec, Squircle, TileSize, pack_pages, rows_used};
@@ -42,8 +42,7 @@ const BAR_GAP: f32 = 4.0;
 /// Under the grid: the caption (and Update chip) line.
 const GUTTER: f32 = 24.0;
 
-/// Panel height for a grid showing `rows` rows. Two rows is 236, the panel's
-/// minimum height.
+/// Panel height for a grid showing `rows` rows.
 pub fn panel_height(rows: usize) -> f32 {
     let rows = rows.clamp(1, GRID.rows) as f32;
     BAR_TOP + BAR_H + BAR_GAP + rows * GRID.cell + (rows - 1.0) * GRID.gap + GUTTER
@@ -54,6 +53,19 @@ pub fn panel_height(rows: usize) -> f32 {
 pub fn tab_height(sizes: &[TileSize], editing: bool) -> f32 {
     let used = rows_used(&pack_pages(&GRID, sizes), sizes);
     panel_height(if editing { used + 1 } else { used })
+}
+
+/// Height of `rows` grid rows.
+fn rows_span(rows: usize) -> f32 {
+    rows as f32 * GRID.cell + rows.saturating_sub(1) as f32 * GRID.gap
+}
+
+/// Where the card of a tile at `tile` goes: at the tile's corner, shifted
+/// back so it stays inside `bound` (the grid, as tall as the card needs).
+fn card_rect(tile: Rect, size: Vec2, bound: Rect) -> Rect {
+    let x = tile.min.x.min(bound.max.x - size.x).max(bound.min.x);
+    let y = tile.min.y.min(bound.max.y - size.y).max(bound.min.y);
+    Rect::from_min_size(pos2(x, y), size)
 }
 
 /// Cells a drag of `d` points from a tile's corner spans, at least one.
@@ -135,14 +147,28 @@ struct Resize {
     size: TileSize,
 }
 
-/// The compact tile opened to full size, kept in egui memory.
-#[derive(Clone, Copy, Default)]
+/// The compact tile opened as a card, kept in egui memory.
+#[derive(Clone, Copy)]
 struct Expanded {
+    /// The tile open now.
     id: Option<&'static str>,
+    /// The card still drawn: `id`, or the one folding back.
+    shown: Option<&'static str>,
     /// egui time it opened, so the opening click does not close it.
     since: f64,
-    /// Show the page it lands on (it may move when it grows).
-    reveal: bool,
+    /// Where its tile is (the card springs from here).
+    tile: Rect,
+}
+
+impl Default for Expanded {
+    fn default() -> Self {
+        Self {
+            id: None,
+            shown: None,
+            since: 0.0,
+            tile: Rect::NOTHING,
+        }
+    }
 }
 
 /// Wheel travel, in lines, that flips a page.
@@ -393,17 +419,13 @@ pub fn show(
         ctx.data(|d| d.get_temp(expand_id)).unwrap_or_default()
     };
     if cctx.closing {
-        expanded.id = None;
+        expanded = Expanded::default();
     }
-    // The open tile is packed at its full size, the one being resized at
-    // the size previewed.
-    let open_id = expanded.id;
+    // The tile being resized is packed at the size previewed.
     let preview = resize.map(|r| (r.id, r.size));
     let size_of = move |t: &GridTile<'_>| {
         let id = t.module.id();
-        if open_id == Some(id) {
-            t.module.size_hint()
-        } else if let Some((rid, size)) = preview
+        if let Some((rid, size)) = preview
             && rid == id
         {
             size
@@ -456,15 +478,6 @@ pub fn show(
     let mut st: PageState = ctx.data(|d| d.get_temp(state_id)).unwrap_or_default();
     let pages = &all_pages[tab.index()];
     st.page = st.page.min(pages.len() - 1);
-    if expanded.reveal {
-        expanded.reveal = false;
-        if let Some(page) = pages.iter().position(|pl| {
-            pl.iter()
-                .any(|p| Some(ids[by_tab[tab.index()][p.index]]) == expanded.id)
-        }) {
-            st.page = page;
-        }
-    }
     let over_panel = pointer.is_some_and(|p| cctx.panel.contains(p));
     let wheel_taken = pointer.is_some_and(|p| {
         pages[st.page].iter().any(|pl| {
@@ -566,6 +579,7 @@ pub fn show(
         }
     }
     if let Some((t, page)) = goto {
+        expanded = Expanded::default();
         out.tab_changed = t != *tab;
         *tab = t;
         st.page = page;
@@ -579,7 +593,19 @@ pub fn show(
     let tab_tiles = &by_tab[ti];
     st.page = st.page.min(pages.len() - 1);
     let shown_sizes: Vec<TileSize> = tab_tiles.iter().map(|&i| size_of(&tiles[i])).collect();
-    out.rows = rows_used(pages, &shown_sizes) + usize::from(editing);
+    let used = rows_used(pages, &shown_sizes);
+    out.rows = used + usize::from(editing);
+    // The open tile's card: its tile's index and its rect, in a grid as
+    // tall as it needs (and the rows that makes).
+    let hints: Vec<TileSize> = tiles.iter().map(|t| t.module.size_hint()).collect();
+    let place = |id: Option<&'static str>, tile: Rect| {
+        let i = ids.iter().position(|x| Some(*x) == id)?;
+        let rows = used.max(hints[i].cells().1);
+        let bound = Rect::from_min_size(grid.min, vec2(grid.width(), rows_span(rows)));
+        let size = GRID.cell_rect(Pos2::ZERO, 0, 0, hints[i]).size();
+        Some((i, card_rect(tile, size, bound), rows))
+    };
+    let card_before = place(expanded.shown, expanded.tile).map(|c| c.1);
 
     // A held tile takes the place of the tile under the pointer; past the
     // last tile of the last page, it goes to the end.
@@ -646,8 +672,6 @@ pub fn show(
     )
     .intersect(cctx.shape);
     let files_hovering = ctx.input(|i| !i.raw.hovered_files.is_empty());
-    // Where the open tile is drawn, to tell clicks outside it.
-    let mut open_rect: Option<Rect> = None;
     let mut new_drag: Option<Drag> = None;
 
     for (tab_idx, all) in all_pages.iter().enumerate() {
@@ -672,7 +696,6 @@ pub fn show(
                 let id = Id::new(("nook-tile", tile.module.id()));
                 let held = drag.as_ref().is_some_and(|d| d.id == tile.module.id());
                 let target = GRID.cell_rect(grid.min, p.col, p.row, size);
-                let is_open = expanded.id == Some(tile.module.id());
                 // Tiles glide to new places and sizes when the layout changes.
                 let (rect, page_alpha) = match (held, pointer, &drag) {
                     (true, Some(ptr), Some(d)) => {
@@ -691,15 +714,8 @@ pub fn show(
                         )
                     }
                 };
-                if is_open {
-                    open_rect = Some(rect);
-                }
                 let ready = tile.module.status() == ModuleStatus::Ready;
-                // An opening tile keeps its compact face until it has nearly
-                // reached full size, then shows its full layout.
-                let grown = rect.width() >= target.width() * 0.92
-                    && rect.height() >= target.height() * 0.92;
-                let compact = is_compact(tile) && !(is_open && grown);
+                let compact = is_compact(tile);
                 let stagger = cctx.stagger(slot);
                 let mut alpha = cctx.alpha * stagger * page_alpha;
                 if tile.hidden {
@@ -734,7 +750,9 @@ pub fn show(
                         // layer under the pointer and nothing in it hovers.
                         ui.expand_to_include_rect(rect);
                         let resp = ui.interact(rect, id.with("tile"), sense);
-                        let hovered = interactive && ui.rect_contains_pointer(rect);
+                        let hovered = interactive
+                            && ui.rect_contains_pointer(rect)
+                            && !card_before.is_some_and(|c| pointer.is_some_and(|p| c.contains(p)));
                         let pressed = hovered && ctx.input(|i| i.pointer.primary_down());
                         if hovered && drag.is_none() {
                             caption = Some((tile.module.name().to_owned(), ready || editing));
@@ -784,14 +802,6 @@ pub fn show(
                         } else {
                             theme
                         };
-                        if is_open {
-                            painter.rect_stroke(
-                                rect.shrink(0.5),
-                                TILE_RADIUS,
-                                egui::Stroke::new(1.0, with_alpha(theme.accent, 0.6)),
-                                egui::StrokeKind::Inside,
-                            );
-                        }
                         if editing {
                             painter.rect_stroke(
                                 rect.shrink(0.5),
@@ -842,12 +852,15 @@ pub fn show(
                                 });
                             }
                         } else if resp.clicked() && ready {
-                            if compact && !is_open {
-                                expanded = Expanded {
-                                    id: Some(tile.module.id()),
-                                    since: now,
-                                    reveal: true,
-                                };
+                            if compact {
+                                if expanded.id != Some(tile.module.id()) {
+                                    expanded = Expanded {
+                                        id: Some(tile.module.id()),
+                                        shown: Some(tile.module.id()),
+                                        since: now,
+                                        tile: target,
+                                    };
+                                }
                             } else {
                                 out.clicked = Some(tile.module.id());
                             }
@@ -916,22 +929,76 @@ pub fn show(
         }
     });
 
-    // A click anywhere but the open tile (another tile included, which
-    // still gets its click) folds it back, and so does Esc.
-    if let Some(id) = expanded.id {
-        let clicked_outside = ctx.input(|i| i.pointer.primary_clicked())
-            && pointer.is_some_and(|p| open_rect.is_none_or(|r| !r.contains(p)));
-        if (now - expanded.since > 0.1 && clicked_outside)
-            || ctx.input(|i| i.key_pressed(egui::Key::Escape))
+    // The open tile's card floats over the grid. A click anywhere but on it
+    // (another tile included, which still gets its click) folds it back, and
+    // so does Esc.
+    if let Some((i, full, rows)) = place(expanded.shown, expanded.tile) {
+        if expanded.id.is_some()
+            && ((now - expanded.since > 0.1
+                && ctx.input(|i| i.pointer.primary_clicked())
+                && pointer.is_some_and(|p| !full.contains(p)))
+                || ctx.input(|i| i.key_pressed(egui::Key::Escape)))
         {
             expanded.id = None;
-        } else if caption.is_none()
-            && let Some(t) = tiles.iter().find(|t| t.module.id() == id)
-        {
-            caption = Some((
-                format!("{}  ·  Click outside to fold", t.module.name()),
-                true,
-            ));
+        }
+        let id = Id::new(("nook-bento-card", ids[i]));
+        let open = expanded.id.is_some();
+        let t = anim::spring_from(
+            &ctx,
+            id,
+            0.0,
+            if open { 1.0 } else { 0.0 },
+            SpringParams::snappy(),
+        )
+        .max(0.0);
+        if !open && t < 0.005 {
+            expanded.shown = None;
+        } else {
+            out.rows = out.rows.max(rows);
+            let (a, b) = (expanded.tile, full);
+            let rect =
+                Rect::from_min_size(a.min.lerp(b.min, t), a.size() + (b.size() - a.size()) * t);
+            // Folded back to the tile's size it shows the compact face.
+            let compact =
+                rect.width() < full.width() * 0.92 || rect.height() < full.height() * 0.92;
+            let tile = &mut tiles[i];
+            let area = Area::new(id)
+                .order(Order::Foreground)
+                .fixed_pos(rect.min)
+                .movable(false)
+                .constrain(false)
+                .sense(Sense::hover())
+                .show(&ctx, |ui| {
+                    ui.multiply_opacity(cctx.alpha);
+                    ui.expand_to_include_rect(rect);
+                    // Swallows the pointer over the card, tiles beneath included.
+                    ui.interact(rect, id.with("hit"), Sense::click());
+                    let hovered = ui.rect_contains_pointer(rect);
+                    let active = tile.module.is_active();
+                    tile_glass(ui.painter(), rect, theme, active, 0.0);
+                    let on_tile;
+                    let theme = if active {
+                        on_tile = theme.on_active_tile();
+                        &on_tile
+                    } else {
+                        theme
+                    };
+                    let inner = tile_inner(rect);
+                    let mut child = ui.new_child(UiBuilder::new().max_rect(inner).id_salt(id));
+                    child.set_clip_rect(rect);
+                    if compact {
+                        compact_tile(&mut child, inner, tile.module.as_ref(), theme, hovered);
+                    } else {
+                        let mut tctx = TileCtx {
+                            theme,
+                            now,
+                            hovered,
+                            files_hovering,
+                        };
+                        tile.module.ui_tile(&mut child, &mut tctx);
+                    }
+                });
+            ctx.set_transform_layer(area.response.layer_id, cctx.transform);
         }
     }
     ctx.data_mut(|d| d.insert_temp(expand_id, expanded));
@@ -1190,8 +1257,11 @@ mod tests {
         // Home: Media 3x2 beside four 1x1s uses two rows, today's height.
         let home = [TileSize::new(3, 2), small, small, small, small];
         assert_eq!(tab_height(&home, false), 236.0);
-        // A short tab is no taller than the minimum panel.
+        // No minimum: one row is one row, two rows 236.
         assert_eq!(panel_height(1), 148.0);
+        assert_eq!(panel_height(2), 236.0);
+        assert_eq!(tab_height(&[TileSize::new(6, 1)], false), 148.0);
+        assert_eq!(tab_height(&[TileSize::Small], false), 148.0);
         // Nine 1x1s and a 2x2 reach into a third row.
         let tools = [vec![TileSize::Large], vec![small; 9]].concat();
         assert_eq!(tab_height(&tools, false), panel_height(3));
@@ -1204,6 +1274,23 @@ mod tests {
             tab_height(&[TileSize::new(6, 4), small], false),
             panel_height(4)
         );
+    }
+
+    #[test]
+    fn card_stays_inside_the_grid() {
+        let grid = Rect::from_min_size(pos2(10.0, 20.0), GRID.size());
+        let size = GRID.cell_rect(Pos2::ZERO, 0, 0, TileSize::new(3, 2)).size();
+        // Last column and last row: pushed back in on both axes.
+        let tile = GRID.cell_rect(grid.min, 5, 3, TileSize::Small);
+        let c = card_rect(tile, size, grid);
+        assert_eq!(c.size(), size);
+        assert_eq!(c.max, grid.max);
+        // First tile: anchored at its own corner.
+        let tile = GRID.cell_rect(grid.min, 0, 0, TileSize::Small);
+        assert_eq!(card_rect(tile, size, grid).min, grid.min);
+        // A one-row tab with a two-row card: the bound is two rows tall.
+        let bound = Rect::from_min_size(grid.min, vec2(grid.width(), rows_span(2)));
+        assert_eq!(card_rect(tile, size, bound).max.y, bound.max.y);
     }
 
     #[test]
