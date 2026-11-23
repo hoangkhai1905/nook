@@ -300,6 +300,19 @@ pub fn install_fonts(ctx: &egui::Context) {
     fonts.font_data.insert("gsf-medium".into(), weight(500.0));
     let proportional = fonts.families.entry(FontFamily::Proportional).or_default();
     proportional.insert(0, "gsf".into());
+    // Chinese/Japanese and Korean titles (songs, notifications) fall back to
+    // the Windows fonts when present.
+    // ponytail: the files are read whole (~23 MB resident); load lazily if
+    // memory matters.
+    let windir = std::env::var("WINDIR").unwrap_or_else(|_| "C:\\Windows".into());
+    for (name, file) in [("cjk-zh", "msyh.ttc"), ("cjk-ko", "malgun.ttf")] {
+        if let Ok(bytes) = std::fs::read(format!("{windir}\\Fonts\\{file}")) {
+            fonts
+                .font_data
+                .insert(name.into(), FontData::from_owned(bytes).into());
+            proportional.push(name.into());
+        }
+    }
     let mut medium = proportional.clone();
     medium[0] = "gsf-medium".into();
     fonts
