@@ -209,15 +209,18 @@ fn read(n: &UserNotification) -> Result<Notification> {
         .unwrap_or_default();
     let Texts { title, body, extra } = split_texts(texts);
 
+    // Only packaged apps have a logo here; desktop apps (Discord, Edge) fall
+    // back to their Start menu icon.
     let icon = display
         .GetLogo(Size {
-            Width: 32.0,
-            Height: 32.0,
+            Width: 64.0,
+            Height: 64.0,
         })
         .and_then(|logo| logo.cast::<IRandomAccessStreamReference>())
         .api("GetLogo")
         .and_then(|logo| media::read_stream(&logo))
         .and_then(|bytes| media::decode_art(&bytes))
+        .or_else(|_| start_menu_icon(&app_id))
         .inspect_err(|e| tracing::debug!("notification icon of {app_name}: {e}"))
         .ok()
         .map(Arc::new);
@@ -229,6 +232,35 @@ fn read(n: &UserNotification) -> Result<Notification> {
         body,
         extra,
         icon,
+    })
+}
+
+/// The app's icon as the Start menu shows it (`shell:AppsFolder\<id>`).
+fn start_menu_icon(app_id: &str) -> Result<Art> {
+    if !valid_aumid(app_id) {
+        return Err(PlatformError::Other("no app id for an icon".into()));
+    }
+    let path = format!("shell:AppsFolder\\{app_id}");
+    // The shell wants an STA thread; this worker is MTA (WinRT).
+    let (w, h, mut rgba) = std::thread::spawn(move || {
+        crate::files::init_thumbnail_thread();
+        crate::files::thumbnail(std::path::Path::new(&path), 64)
+    })
+    .join()
+    .map_err(|_| PlatformError::Other("icon thread panicked".into()))??;
+    // The thumbnail is premultiplied; `Art` is not.
+    for px in rgba.as_chunks_mut::<4>().0 {
+        let a = px[3] as u32;
+        if a > 0 && a < 255 {
+            for c in &mut px[..3] {
+                *c = ((*c as u32 * 255 + a / 2) / a).min(255) as u8;
+            }
+        }
+    }
+    Ok(Art {
+        width: w as usize,
+        height: h as usize,
+        rgba,
     })
 }
 
