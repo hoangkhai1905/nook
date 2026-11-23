@@ -12,13 +12,9 @@ use nook_ui::module::TileCtx;
 use nook_ui::theme::{SIZE_ICON, SIZE_LABEL, Theme, mix, with_alpha};
 use nook_ui::{anim, paint, widgets};
 
-/// A faint fill for wells and inactive controls.
+/// A faint fill for wells and inactive controls: an 8% state layer.
 pub fn wash(theme: &Theme) -> Color32 {
-    if theme.dark {
-        Color32::from_white_alpha(14)
-    } else {
-        Color32::from_black_alpha(10)
-    }
+    with_alpha(theme.roles.on_surface, 0.08)
 }
 
 /// A text button, accent-filled when `primary`.
@@ -45,20 +41,17 @@ pub fn button(
     };
     let r = Rect::from_center_size(rect.center(), rect.size() * press);
     let painter = ui.painter();
+    // A `primary` pill for the main action, else `surface_container_highest`,
+    // each with an 8% state layer on hover.
     let (fill, fg) = if primary {
-        (
-            mix(theme.accent, Color32::WHITE, 0.12 * hover),
-            Color32::WHITE,
-        )
+        (theme.roles.primary, theme.roles.on_primary)
     } else {
         (
-            with_alpha(
-                theme.text,
-                if theme.dark { 0.10 } else { 0.07 } + 0.06 * hover,
-            ),
-            theme.text,
+            theme.roles.surface_container_highest,
+            theme.roles.on_surface,
         )
     };
+    let fill = mix(fill, fg, 0.08 * hover);
     painter.rect_filled(r, r.height() * 0.5, fill);
     let font = Theme::font_semibold(SIZE_LABEL);
     let galley = painter.layout_no_wrap(label.to_owned(), font, fg);
@@ -96,24 +89,20 @@ pub fn chip(ui: &mut Ui, rect: Rect, label: &str, selected: bool, theme: &Theme)
     let hover = anim::tween(ctx, resp.id.with("h"), resp.hovered(), 0.12);
     let on = anim::tween(ctx, resp.id.with("on"), selected, 0.16);
     let painter = ui.painter();
-    let idle = with_alpha(wash(theme), 1.0 + 0.8 * hover);
+    let roles = &theme.roles;
     let fill = mix(
-        idle,
-        with_alpha(theme.accent, if theme.dark { 0.32 } else { 0.18 }),
+        mix(
+            roles.surface_container_highest,
+            roles.on_surface,
+            0.08 * hover,
+        ),
+        roles.secondary_container,
         on,
     );
     painter.rect_filled(rect, rect.height() * 0.5, fill);
-    if on > 0.01 {
-        painter.rect_stroke(
-            rect,
-            rect.height() * 0.5,
-            Stroke::new(1.0, with_alpha(theme.accent, 0.7 * on)),
-            egui::StrokeKind::Inside,
-        );
-    }
     let color = mix(
-        mix(theme.text_dim, theme.text, hover),
-        theme.accent_fg(),
+        mix(roles.on_surface_variant, roles.on_surface, hover),
+        roles.on_secondary_container,
         on,
     );
     painter.text(
@@ -173,16 +162,14 @@ pub fn field(
     let focused = ui.ctx().memory(|m| m.has_focus(id));
     let t = anim::tween(ui.ctx(), id.with("focus"), focused, 0.15);
     let painter = ui.painter();
-    let fill = if theme.dark {
-        Color32::from_black_alpha(60)
-    } else {
-        Color32::from_white_alpha(200)
-    };
-    painter.rect_filled(rect, 10.0, fill);
+    painter.rect_filled(rect, 10.0, theme.roles.surface_container_highest);
     painter.rect_stroke(
         rect,
         10.0,
-        Stroke::new(1.0, mix(theme.tile_rim, with_alpha(theme.accent, 0.85), t)),
+        Stroke::new(
+            1.0 + t,
+            mix(theme.roles.outline_variant, theme.roles.primary, t),
+        ),
         egui::StrokeKind::Inside,
     );
     let inner = rect.shrink2(vec2(10.0, 0.0));
@@ -228,11 +215,7 @@ pub fn row(ui: &mut Ui, rect: Rect, id: Id, selected: bool, theme: &Theme) -> Re
     let hover = anim::tween(ui.ctx(), id.with("hover"), resp.hovered(), 0.12);
     let t = if selected { 1.0 } else { hover * 0.7 };
     if t > 0.0 {
-        let fill = if theme.dark {
-            Color32::from_white_alpha(22)
-        } else {
-            Color32::from_black_alpha(14)
-        };
+        let fill = with_alpha(theme.roles.on_surface, 0.12);
         ui.painter().rect_filled(rect, 10.0, with_alpha(fill, t));
     }
     resp

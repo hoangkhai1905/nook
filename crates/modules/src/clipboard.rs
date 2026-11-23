@@ -172,11 +172,7 @@ fn hover_box(ui: &mut Ui, rect: Rect, id: Id, radius: f32, theme: &Theme) -> Res
     let resp = ui.interact(rect, id, Sense::click());
     let t = anim::tween(ui.ctx(), id.with("hover"), resp.hovered(), 0.12);
     if t > 0.0 {
-        let wash = if theme.dark {
-            Color32::from_white_alpha(18)
-        } else {
-            Color32::from_black_alpha(12)
-        };
+        let wash = with_alpha(theme.roles.on_surface, 0.08);
         ui.painter().rect_filled(rect, radius, with_alpha(wash, t));
     }
     resp

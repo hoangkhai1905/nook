@@ -198,6 +198,79 @@ pub fn ring(
     painter.add(PathShape::line(points, PathStroke::new(width, color)));
 }
 
+/// The point `t` (0..1) of the way around the rounded rectangle `rect`,
+/// measured by arc length from the top centre, clockwise. `t = 1` is a full
+/// loop, back at the top centre.
+pub fn edge_point(rect: egui::Rect, radius: f32, t: f32) -> Pos2 {
+    let r = radius.clamp(0.0, 0.5 * rect.width().min(rect.height()));
+    let (sx, sy) = (rect.width() - 2.0 * r, rect.height() - 2.0 * r);
+    let q = std::f32::consts::FRAC_PI_2 * r;
+    let total = 2.0 * (sx + sy) + 4.0 * q;
+    // Walk from the start of the top edge, half of it past the top centre.
+    let mut d = (sx / 2.0 + t.clamp(0.0, 1.0) * total) % total;
+    let (min, max) = (rect.min, rect.max);
+    let arc = |c: Pos2, d: f32, dir: fn(f32, f32) -> egui::Vec2| c + dir(d / r.max(1e-6), r);
+    if d <= sx {
+        return pos2(min.x + r + d, min.y);
+    }
+    d -= sx;
+    if d <= q {
+        return arc(pos2(max.x - r, min.y + r), d, |a, r| {
+            vec2(a.sin(), -a.cos()) * r
+        });
+    }
+    d -= q;
+    if d <= sy {
+        return pos2(max.x, min.y + r + d);
+    }
+    d -= sy;
+    if d <= q {
+        return arc(pos2(max.x - r, max.y - r), d, |a, r| {
+            vec2(a.cos(), a.sin()) * r
+        });
+    }
+    d -= q;
+    if d <= sx {
+        return pos2(max.x - r - d, max.y);
+    }
+    d -= sx;
+    if d <= q {
+        return arc(pos2(min.x + r, max.y - r), d, |a, r| {
+            vec2(-a.sin(), a.cos()) * r
+        });
+    }
+    d -= q;
+    if d <= sy {
+        return pos2(min.x, max.y - r - d);
+    }
+    d -= sy;
+    arc(pos2(min.x + r, min.y + r), d, |a, r| {
+        vec2(-a.cos(), -a.sin()) * r
+    })
+}
+
+/// A stroke along the rounded rectangle from the top centre, clockwise, as
+/// far as `progress` (0..1) of the loop.
+pub fn edge_line(
+    painter: &Painter,
+    rect: egui::Rect,
+    radius: f32,
+    width: f32,
+    progress: f32,
+    color: Color32,
+) {
+    let progress = progress.clamp(0.0, 1.0);
+    if progress <= 0.0 {
+        return;
+    }
+    // About one point per 2 px of the loop.
+    let n = ((progress * 2.0 * (rect.width() + rect.height()) / 2.0).ceil() as usize).max(2);
+    let points = (0..=n)
+        .map(|i| edge_point(rect, radius, progress * i as f32 / n as f32))
+        .collect();
+    painter.add(PathShape::line(points, PathStroke::new(width, color)));
+}
+
 fn centroid(points: &[Pos2]) -> Pos2 {
     let sum = points
         .iter()
@@ -264,6 +337,22 @@ mod tests {
         assert!(w("00:00") > 0.0);
         assert_eq!(w("11:11"), w("00:00"));
         assert_eq!(w("8:59"), w("1:11"));
+    }
+
+    #[test]
+    fn edge_point_walks_clockwise_from_the_top_centre() {
+        let rect = egui::Rect::from_min_size(pos2(10.0, 20.0), vec2(100.0, 100.0));
+        let near = |a: Pos2, b: Pos2| (a - b).length() < 1e-3;
+        assert!(near(edge_point(rect, 14.0, 0.0), pos2(60.0, 20.0)));
+        // A quarter of the way round a square is the middle of its right edge.
+        assert!(near(edge_point(rect, 14.0, 0.25), pos2(110.0, 70.0)));
+        assert!(near(edge_point(rect, 14.0, 0.5), pos2(60.0, 120.0)));
+        assert!(near(edge_point(rect, 14.0, 0.75), pos2(10.0, 70.0)));
+        // A full loop ends where it started.
+        assert!(near(edge_point(rect, 14.0, 1.0), pos2(60.0, 20.0)));
+        // 0.1 is just inside the top-right corner arc.
+        let p = edge_point(rect, 14.0, 0.1);
+        assert!(((p - pos2(96.0, 34.0)).length() - 14.0).abs() < 1e-3);
     }
 
     #[test]

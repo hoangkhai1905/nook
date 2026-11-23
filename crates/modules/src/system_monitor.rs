@@ -503,7 +503,7 @@ fn chart_grid(painter: &egui::Painter, rect: Rect, theme: &Theme) {
         painter.hline(
             rect.x_range(),
             y,
-            egui::Stroke::new(1.0, with_alpha(theme.tile_rim, 0.6)),
+            egui::Stroke::new(1.0, with_alpha(theme.roles.outline_variant, 0.6)),
         );
     }
 }

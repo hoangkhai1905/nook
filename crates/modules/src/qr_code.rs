@@ -1146,7 +1146,7 @@ impl QrCodeModule {
             ui.painter().rect_stroke(
                 img_rect,
                 radius,
-                egui::Stroke::new(1.0, theme.tile_rim),
+                egui::Stroke::new(1.0, theme.roles.outline_variant),
                 egui::StrokeKind::Outside,
             );
         }

@@ -12,8 +12,8 @@ pub const FALLBACK_ACCENT: Color32 = Color32::from_rgb(0x7C, 0x5C, 0xFF);
 
 /// 8 px spacing grid.
 pub const SPACE: f32 = 8.0;
-pub const TILE_RADIUS: f32 = 16.0;
-pub const TILE_PADDING: f32 = 12.0;
+pub const TILE_RADIUS: f32 = 14.0;
+pub const TILE_PADDING: f32 = 8.0;
 
 pub const SIZE_LABEL: f32 = 11.0;
 pub const SIZE_BODY: f32 = 13.0;
@@ -222,6 +222,19 @@ impl Theme {
     /// Fill for active tiles: the primary container.
     pub fn active_tile(&self) -> (Color32, Color32) {
         (self.roles.primary_container, self.roles.primary_container)
+    }
+
+    /// This theme re-colored for content on an active tile: the roles of a
+    /// `primary_container` fill, so text and icons read `on_primary_container`.
+    pub fn on_active_tile(&self) -> Self {
+        let on = self.roles.on_primary_container;
+        let mut t = self.clone();
+        t.roles.primary = on;
+        t.accent = on;
+        t.text = on;
+        t.text_dim = mix(on, self.roles.primary_container, 0.3);
+        t.text_faint = mix(on, self.roles.primary_container, 0.55);
+        t
     }
 
     /// Accent readable as text/icon color on the surface.

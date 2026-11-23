@@ -377,11 +377,7 @@ impl ColorPicker {
             let resp = ui.interact(card, id, Sense::click());
             let hover = anim::tween(ui.ctx(), id.with("hover"), resp.hovered(), 0.12);
             if hover > 0.0 {
-                let wash = if theme.dark {
-                    Color32::from_white_alpha(18)
-                } else {
-                    Color32::from_black_alpha(12)
-                };
+                let wash = with_alpha(theme.roles.on_surface, 0.08);
                 ui.painter()
                     .rect_filled(card, TILE_RADIUS, with_alpha(wash, hover));
             }
@@ -394,7 +390,7 @@ impl ColorPicker {
                 swatch,
                 8.0,
                 color32(c),
-                Stroke::new(1.0, theme.tile_rim),
+                Stroke::new(1.0, theme.roles.outline_variant),
                 egui::StrokeKind::Inside,
             );
             let label_y = inner.max.y - 7.0;

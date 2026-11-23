@@ -12,11 +12,11 @@
 //! `%APPDATA%\Nook\calc.txt`); click an entry to reuse it.
 
 use egui::text::{CCursor, CCursorRange};
-use egui::{Align2, Color32, Id, Rect, ScrollArea, Sense, Ui, UiBuilder, pos2, vec2};
+use egui::{Align2, Id, Rect, ScrollArea, Sense, Ui, UiBuilder, pos2, vec2};
 use nook_platform::clipboard;
 use nook_ui::bento::tile_header;
 use nook_ui::module::{Module, TileCtx, TileSize};
-use nook_ui::theme::{SIZE_BODY, SIZE_LABEL, Theme, mix, with_alpha};
+use nook_ui::theme::{SIZE_BODY, SIZE_LABEL, Theme, mix};
 use nook_ui::{anim, icons, paint, widgets};
 
 use crate::kit;
@@ -1073,29 +1073,15 @@ fn key_button(
     );
     let r = Rect::from_center_size(rect.center(), rect.size() * (1.0 - 0.05 * press));
     let painter = ui.painter();
-    let base = |a: u8| {
-        if theme.dark {
-            Color32::from_white_alpha(a)
-        } else {
-            Color32::from_black_alpha(a / 2 + 2)
-        }
-    };
+    let roles = &theme.roles;
     let (fill, fg) = match kind {
-        KeyKind::Equals => (
-            mix(theme.accent, Color32::WHITE, 0.15 * hover),
-            Color32::WHITE,
-        ),
-        KeyKind::Op => (
-            with_alpha(
-                theme.accent,
-                if theme.dark { 0.22 } else { 0.14 } + 0.12 * hover,
-            ),
-            theme.accent_fg(),
-        ),
-        KeyKind::Digit => (mix(base(22), base(40), hover), theme.text),
-        KeyKind::Func => (mix(base(10), base(28), hover), theme.text_dim),
-        KeyKind::Action => (mix(base(10), base(28), hover), theme.text),
+        KeyKind::Equals => (roles.primary, roles.on_primary),
+        KeyKind::Op => (roles.secondary_container, roles.on_secondary_container),
+        KeyKind::Digit => (roles.surface_container_highest, roles.on_surface),
+        KeyKind::Func => (roles.surface_container_high, roles.on_surface_variant),
+        KeyKind::Action => (roles.surface_container_high, roles.on_surface),
     };
+    let fill = mix(fill, fg, 0.08 * hover);
     painter.rect_filled(r, 11.0, fill);
     let font = match kind {
         KeyKind::Digit | KeyKind::Equals | KeyKind::Op => Theme::font_semibold(SIZE_BODY + 3.0),

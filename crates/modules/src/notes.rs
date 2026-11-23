@@ -221,11 +221,8 @@ impl Notes {
                     let resp = ui.interact(row, id, Sense::click());
                     let hover = anim::tween(ui.ctx(), id.with("hover"), resp.hovered(), 0.12);
                     let selected = i == self.current;
-                    let wash = if theme.dark {
-                        Color32::from_white_alpha(if selected { 26 } else { 16 })
-                    } else {
-                        Color32::from_black_alpha(if selected { 18 } else { 10 })
-                    };
+                    let wash =
+                        with_alpha(theme.roles.on_surface, if selected { 0.12 } else { 0.08 });
                     let t = if selected { 1.0 } else { hover };
                     if t > 0.0 {
                         ui.painter().rect_filled(row, 10.0, with_alpha(wash, t));

@@ -205,11 +205,7 @@ impl FileShelf {
         let resp = ui.interact(card, id, Sense::click_and_drag());
         let hover = anim::tween(ui.ctx(), id.with("hover"), resp.hovered(), 0.12);
         if hover > 0.0 {
-            let wash = if theme.dark {
-                Color32::from_white_alpha(16)
-            } else {
-                Color32::from_black_alpha(10)
-            };
+            let wash = with_alpha(theme.roles.on_surface, 0.08);
             ui.painter()
                 .rect_filled(card, nook_ui::theme::TILE_RADIUS, with_alpha(wash, hover));
         }

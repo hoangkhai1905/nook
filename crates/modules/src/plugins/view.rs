@@ -695,7 +695,7 @@ impl Renderer<'_> {
                 egui::Shape::rect_stroke(
                     resp.rect,
                     12.0,
-                    Stroke::new(1.0, theme.tile_rim),
+                    Stroke::new(1.0, theme.roles.outline_variant),
                     egui::StrokeKind::Inside,
                 ),
             ]),

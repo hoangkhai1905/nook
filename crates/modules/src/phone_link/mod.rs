@@ -563,11 +563,7 @@ fn fit(area: Rect, aspect: f32) -> Rect {
 }
 
 fn wash(theme: &Theme) -> Color32 {
-    if theme.dark {
-        Color32::from_white_alpha(14)
-    } else {
-        Color32::from_black_alpha(10)
-    }
+    with_alpha(theme.roles.on_surface, 0.08)
 }
 
 /// A text button: accent-filled when `primary`.
@@ -594,19 +590,14 @@ fn button(
     let r = Rect::from_center_size(rect.center(), rect.size() * press);
     let painter = ui.painter();
     let (fill, fg) = if primary {
-        (
-            mix(theme.accent, Color32::WHITE, 0.12 * hover),
-            Color32::WHITE,
-        )
+        (theme.roles.primary, theme.roles.on_primary)
     } else {
         (
-            with_alpha(
-                theme.text,
-                if theme.dark { 0.10 } else { 0.07 } + 0.06 * hover,
-            ),
-            theme.text,
+            theme.roles.surface_container_highest,
+            theme.roles.on_surface,
         )
     };
+    let fill = mix(fill, fg, 0.08 * hover);
     painter.rect_filled(r, r.height() * 0.5, fill);
     let font = Theme::font_semibold(SIZE_LABEL);
     let galley = painter.layout_no_wrap(label.to_owned(), font, fg);

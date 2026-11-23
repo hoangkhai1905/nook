@@ -283,7 +283,7 @@ pub fn page(
                     ui.painter().hline(
                         (card.min.x + 14.0)..=(card.max.x - 14.0),
                         head.max.y,
-                        Stroke::new(1.0, with_alpha(theme.tile_rim, fade)),
+                        Stroke::new(1.0, with_alpha(theme.roles.outline_variant, fade)),
                     );
                     let body = Rect::from_min_size(
                         pos2(card.min.x, head.max.y - 6.0 * (1.0 - fade)),

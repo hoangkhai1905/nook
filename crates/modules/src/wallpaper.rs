@@ -931,7 +931,7 @@ impl Module for Wallpaper {
                 ui.painter().rect_stroke(
                     r,
                     9.0,
-                    egui::Stroke::new(1.0, theme.tile_rim),
+                    egui::Stroke::new(1.0, theme.roles.outline_variant),
                     egui::StrokeKind::Inside,
                 );
             }

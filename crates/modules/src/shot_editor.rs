@@ -645,7 +645,7 @@ impl Editor {
             .min(1.0 / ppp);
         let shown = Rect::from_center_size(room.center(), img * scale);
         ui.painter()
-            .rect_filled(shown.expand(1.0), 2.0, theme.tile_rim);
+            .rect_filled(shown.expand(1.0), 2.0, theme.roles.outline_variant);
         ui.painter().image(
             texture.id(),
             shown,

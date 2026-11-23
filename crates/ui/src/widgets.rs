@@ -9,11 +9,11 @@ use crate::theme::{SIZE_LABEL, Theme, mix, with_alpha};
 use egui::{Align2, Color32, Response, Sense, Stroke, Ui, pos2, vec2};
 
 /// Size of [`toggle`].
-pub const TOGGLE_SIZE: egui::Vec2 = vec2(36.0, 22.0);
+pub const TOGGLE_SIZE: egui::Vec2 = vec2(40.0, 24.0);
 
-/// iOS-style switch whose knob glides on a spring. The knob sits inset in
-/// the track with a soft shadow and stretches toward its travel while
-/// pressed; the off track keeps a rim so the switch reads on any glass.
+/// Material 3 switch: a `primary` track with a large `on_primary` knob when
+/// on; a `surface_container_highest` track with an outline and a small
+/// knob when off. The knob glides on a spring and grows while pressed.
 pub fn toggle(ui: &mut Ui, on: &mut bool, theme: &Theme) -> Response {
     let (rect, mut resp) = ui.allocate_exact_size(TOGGLE_SIZE, Sense::click());
     if resp.clicked() {
@@ -28,7 +28,6 @@ pub fn toggle(ui: &mut Ui, on: &mut bool, theme: &Theme) -> Response {
         SpringParams::with_overshoot(500.0, 0.06),
     );
     let lit = t.clamp(0.0, 1.0);
-    let hover = anim::tween(ctx, resp.id.with("hover"), resp.hovered(), 0.12);
     let press = anim::spring(
         ctx,
         resp.id.with("press"),
@@ -39,48 +38,30 @@ pub fn toggle(ui: &mut Ui, on: &mut bool, theme: &Theme) -> Response {
         },
         SpringParams::critical(900.0),
     );
+    let roles = &theme.roles;
     let painter = ui.painter();
     let radius = rect.height() * 0.5;
-
-    // Track: a visible off state that brightens on hover, then the accent.
-    let (off, off_hover, rim) = if theme.dark {
-        (
-            Color32::from_white_alpha(40),
-            Color32::from_white_alpha(56),
-            Color32::from_white_alpha(22),
-        )
-    } else {
-        (
-            Color32::from_black_alpha(26),
-            Color32::from_black_alpha(38),
-            Color32::from_black_alpha(18),
-        )
-    };
-    let track = mix(mix(off, off_hover, hover), theme.accent, lit);
-    painter.rect_filled(rect, radius, track);
+    painter.rect_filled(
+        rect,
+        radius,
+        mix(roles.surface_container_highest, roles.primary, lit),
+    );
     painter.rect_stroke(
         rect,
         radius,
-        Stroke::new(1.0, with_alpha(rim, 1.0 - lit)),
+        Stroke::new(2.0, with_alpha(roles.outline, 1.0 - lit)),
         egui::StrokeKind::Inside,
     );
-
-    // Knob: inset 3 px, up to 5 px wider while pressed.
-    let inset = 3.0;
-    let d = rect.height() - 2.0 * inset;
-    let w = d + 5.0 * press;
-    let travel = rect.width() - 2.0 * inset - w;
-    let knob = egui::Rect::from_min_size(
-        pos2(rect.min.x + inset + travel * t, rect.min.y + inset),
-        vec2(w, d),
-    );
-    let shadow = Color32::from_black_alpha(if theme.dark { 70 } else { 40 });
-    painter.rect_filled(knob.translate(vec2(0.0, 1.0)).expand(0.5), d, shadow);
-    painter.rect_filled(knob, d * 0.5, Color32::WHITE);
+    // Knob: 12 px off, 18 px on, 2 px more while pressed.
+    let d = 12.0 + 6.0 * lit + 2.0 * press;
+    let travel = rect.width() - rect.height();
+    let center = pos2(rect.min.x + radius + travel * t, rect.center().y);
+    painter.circle_filled(center, d * 0.5, mix(roles.outline, roles.on_primary, lit));
     resp
 }
 
-/// Segmented control; the highlight slides between options on a spring.
+/// Segmented control: a round track, with the selected option on a
+/// `secondary_container` pill that slides between options on a spring.
 pub fn segmented(ui: &mut Ui, options: &[&str], selected: &mut usize, theme: &Theme) -> Response {
     let font = Theme::font(SIZE_LABEL);
     let seg_w = options
@@ -95,13 +76,9 @@ pub fn segmented(ui: &mut Ui, options: &[&str], selected: &mut usize, theme: &Th
         + 14.0;
     let size = vec2(seg_w * options.len() as f32 + 4.0, 24.0);
     let (rect, mut resp) = ui.allocate_exact_size(size, Sense::click());
+    let roles = &theme.roles;
     let painter = ui.painter();
-    let track = if theme.dark {
-        Color32::from_white_alpha(14)
-    } else {
-        Color32::from_black_alpha(14)
-    };
-    painter.rect_filled(rect, 12.0, track);
+    painter.rect_filled(rect, 12.0, roles.surface_container_highest);
 
     if resp.clicked()
         && let Some(p) = resp.interact_pointer_pos()
@@ -122,23 +99,20 @@ pub fn segmented(ui: &mut Ui, options: &[&str], selected: &mut usize, theme: &Th
         pos2(rect.min.x + 2.0 + pos * seg_w, rect.min.y + 2.0),
         vec2(seg_w, size.y - 4.0),
     );
-    let hl_fill = if theme.dark {
-        Color32::from_white_alpha(36)
-    } else {
-        Color32::WHITE
-    };
-    painter.rect_filled(hl, 10.0, hl_fill);
+    painter.rect_filled(hl, 10.0, roles.secondary_container);
     for (i, o) in options.iter().enumerate() {
         let c = pos2(rect.min.x + 2.0 + seg_w * (i as f32 + 0.5), rect.center().y);
         let near = 1.0 - (pos - i as f32).abs().min(1.0);
-        let color = mix(theme.text_dim, theme.text, near);
+        let color = mix(roles.on_surface_variant, roles.on_secondary_container, near);
         painter.text(c, Align2::CENTER_CENTER, *o, font.clone(), color);
     }
     resp
 }
 
-/// Horizontal slider over `0..=1` with an accent fill and a white knob.
-/// `steps > 0` snaps the value to that many intervals.
+/// Horizontal slider over `0..=1` in the Material 3 Expressive style: a
+/// thick `primary` active track, a small handle bar and a
+/// `secondary_container` inactive track. `steps > 0` snaps the value to that
+/// many intervals.
 pub fn slider(ui: &mut Ui, value: &mut f32, width: f32, steps: u32, theme: &Theme) -> Response {
     let (rect, mut resp) = ui.allocate_exact_size(vec2(width, 22.0), Sense::click_and_drag());
     let inset = 8.0;
@@ -162,26 +136,35 @@ pub fn slider(ui: &mut Ui, value: &mut f32, width: f32, steps: u32, theme: &Them
         0.12,
     );
     let painter = ui.painter();
-    let track = egui::Rect::from_center_size(rect.center(), vec2(rect.width() - 2.0 * inset, 4.0));
-    let empty = if theme.dark {
-        Color32::from_white_alpha(30)
-    } else {
-        Color32::from_black_alpha(22)
+    let track = egui::Rect::from_center_size(rect.center(), vec2(rect.width() - 2.0 * inset, 10.0));
+    let x = track.min.x + track.width() * t;
+    // The handle bar leaves a gap on each side of it.
+    let gap = 5.0;
+    let (cap, round) = (5, 2);
+    let part = |from: f32, to: f32, color: Color32, left: u8, right: u8| {
+        if to - from > 0.5 {
+            painter.rect_filled(
+                egui::Rect::from_min_max(pos2(from, track.min.y), pos2(to, track.max.y)),
+                egui::CornerRadius {
+                    nw: left,
+                    sw: left,
+                    ne: right,
+                    se: right,
+                },
+                color,
+            );
+        }
     };
-    painter.rect_filled(track, 2.0, empty);
-    let fill = egui::Rect::from_min_max(
-        track.min,
-        pos2(track.min.x + track.width() * t, track.max.y),
+    part(track.min.x, x - gap, theme.roles.primary, cap, round);
+    part(
+        x + gap,
+        track.max.x,
+        theme.roles.secondary_container,
+        round,
+        cap,
     );
-    painter.rect_filled(fill, 2.0, theme.accent);
-    let knob = pos2(track.min.x + track.width() * t, rect.center().y);
-    let r = 7.0 + hover;
-    painter.circle_filled(
-        knob + vec2(0.0, 1.0),
-        r + 0.5,
-        Color32::from_black_alpha(if theme.dark { 70 } else { 40 }),
-    );
-    painter.circle_filled(knob, r, Color32::WHITE);
+    let bar = egui::Rect::from_center_size(pos2(x, rect.center().y), vec2(4.0 - hover, 20.0));
+    painter.rect_filled(bar, 2.0, theme.roles.primary);
     resp
 }
 
@@ -209,11 +192,7 @@ pub fn swatches(
         resp.mark_changed();
     }
     let painter = ui.painter();
-    let rim = if theme.dark {
-        Color32::from_white_alpha(40)
-    } else {
-        Color32::from_black_alpha(30)
-    };
+    let rim = theme.roles.outline_variant;
     for (i, color) in colors.iter().enumerate() {
         let c = pos2(rect.min.x + D * 0.5 + i as f32 * (D + GAP), rect.center().y);
         let grow = if hovered == Some(i) { 1.0 } else { 0.0 };
@@ -266,19 +245,20 @@ pub fn icon_button(
     );
     let painter = ui.painter();
     let r = rect.width() * 0.5 * (1.0 - 0.06 * press);
-    let wash = if theme.dark {
-        Color32::from_white_alpha(22)
+    // Round: a `primary` circle when on, else a `surface_container_highest`
+    // one, with an 8% state layer on hover.
+    let (fill, color) = if active {
+        (theme.roles.primary, theme.roles.on_primary)
     } else {
-        Color32::from_black_alpha(16)
+        (
+            theme.roles.surface_container_highest,
+            theme.roles.on_surface,
+        )
     };
+    painter.circle_filled(rect.center(), r, fill);
     if hover > 0.01 {
-        painter.circle_filled(rect.center(), r, with_alpha(wash, hover));
+        painter.circle_filled(rect.center(), r, with_alpha(color, 0.08 * hover));
     }
-    let color = if active {
-        theme.accent_fg()
-    } else {
-        theme.text
-    };
     paint::icon(
         painter,
         rect.center(),
@@ -306,15 +286,10 @@ pub fn disclosure_header(
     let hover = anim::tween(ui.ctx(), resp.id.with("hover"), resp.hovered(), 0.12);
     let painter = ui.painter();
     if hover > 0.01 {
-        let wash = if theme.dark {
-            Color32::from_white_alpha(8)
-        } else {
-            Color32::from_black_alpha(6)
-        };
         let s = Squircle::new(rect.shrink(1.0), crate::theme::TILE_RADIUS - 1.0);
         painter.add(egui::epaint::PathShape::convex_polygon(
             s.outline(),
-            with_alpha(wash, hover),
+            with_alpha(theme.roles.on_surface, 0.08 * hover),
             Stroke::NONE,
         ));
     }
@@ -369,17 +344,15 @@ pub fn separator(ui: &mut Ui, theme: &Theme) {
     ui.painter().hline(
         rect.x_range(),
         rect.center().y,
-        Stroke::new(1.0, theme.tile_rim),
+        Stroke::new(1.0, theme.roles.outline_variant),
     );
 }
 
-/// A glass card (same look as a bento tile) behind arbitrary content.
+/// A card (same flat look as a bento tile) behind arbitrary content.
 pub fn card(painter: &egui::Painter, rect: egui::Rect, theme: &Theme) {
-    let s = Squircle::new(rect, crate::theme::TILE_RADIUS);
-    let outline = s.outline();
-    paint::fill_gradient(painter, &outline, theme.tile_top, theme.tile_bottom);
-    painter.add(egui::epaint::PathShape::closed_line(
-        outline,
-        egui::epaint::PathStroke::new(1.0, theme.tile_rim),
+    painter.add(egui::epaint::PathShape::convex_polygon(
+        Squircle::new(rect, crate::theme::TILE_RADIUS).outline(),
+        theme.roles.surface_container,
+        Stroke::NONE,
     ));
 }

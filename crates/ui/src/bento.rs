@@ -17,7 +17,7 @@
 use crate::anim;
 use crate::geometry::{GridSpec, Squircle, TileSize, pack_pages, rows_used};
 use crate::icons;
-use crate::module::{Badge, GridTile, Module, ModuleStatus, Tab, TileCtx};
+use crate::module::{Badge, EdgeLine, GridTile, Module, ModuleStatus, Tab, TileCtx};
 use crate::paint;
 use crate::shell::ContentCtx;
 use crate::spring::SpringParams;
@@ -172,33 +172,70 @@ fn is_compact(tile: &GridTile<'_>) -> bool {
         && tile.size.is_smaller_than(tile.module.size_hint())
 }
 
-/// Tile background: flat surface container fill, with hover glow.
+/// Tile background: a flat fill (primary container when active), with an
+/// 8% state layer of the content color on hover.
 fn tile_glass(painter: &egui::Painter, rect: Rect, theme: &Theme, active: bool, lift: f32) {
-    let shape = Squircle::new(rect, TILE_RADIUS);
-    let outline = shape.outline();
-    if lift > 0.01 {
-        paint::glow(painter, &shape, theme.accent, lift * 0.6);
-    }
-    let (top, bottom) = if active {
-        theme.active_tile()
+    let outline = Squircle::new(rect, TILE_RADIUS).outline();
+    let (fill, on) = if active {
+        (
+            theme.roles.primary_container,
+            theme.roles.on_primary_container,
+        )
     } else {
-        (theme.tile_top, theme.tile_bottom)
+        (theme.roles.surface_container, theme.roles.on_surface)
     };
-    // Hover brightens the top of the gradient a touch.
-    let top = theme::mix(top, with_alpha(theme.text, 0.16), lift * 0.4);
-    paint::fill_gradient(painter, &outline, top, bottom);
-    painter.add(egui::epaint::PathShape::closed_line(
-        outline,
-        egui::epaint::PathStroke::new(1.0, theme.tile_rim),
+    painter.add(egui::Shape::convex_polygon(
+        outline.clone(),
+        fill,
+        egui::Stroke::NONE,
     ));
+    if lift > 0.01 {
+        painter.add(egui::Shape::convex_polygon(
+            outline,
+            with_alpha(on, 0.08 * lift.min(1.0)),
+            egui::Stroke::NONE,
+        ));
+    }
 }
 
-fn tile_inner(rect: Rect, size: TileSize) -> Rect {
-    rect.shrink(if size == TileSize::Small {
-        8.0
+/// Inset of the timer's edge line from the tile's edge (it is 3 px wide).
+const EDGE_INSET: f32 = 4.0;
+
+/// Draws a module's countdown line around the tile: a track, and the
+/// primary line over it, which glides between its once-a-second steps.
+fn edge_line(
+    ctx: &egui::Context,
+    painter: &egui::Painter,
+    rect: Rect,
+    id: Id,
+    theme: &Theme,
+    line: EdgeLine,
+    now: f64,
+) {
+    let secs = if anim::motion(ctx).reduced { 0.0 } else { 0.3 };
+    let progress = ctx.animate_value_with_time(id.with("edge"), line.progress, secs);
+    let alpha = if line.pulse {
+        0.4 + 0.6 * ((now * 3.0).sin() * 0.5 + 0.5) as f32
+    } else if line.dim {
+        0.4
     } else {
-        TILE_PADDING
-    })
+        1.0
+    };
+    let rect = rect.shrink(EDGE_INSET);
+    let radius = TILE_RADIUS - EDGE_INSET;
+    paint::edge_line(painter, rect, radius, 3.0, 1.0, theme.roles.outline_variant);
+    paint::edge_line(
+        painter,
+        rect,
+        radius,
+        3.0,
+        progress,
+        with_alpha(theme.roles.primary, alpha),
+    );
+}
+
+fn tile_inner(rect: Rect) -> Rect {
+    rect.shrink(TILE_PADDING)
 }
 
 fn tab_icon(tab: Tab) -> &'static str {
@@ -733,6 +770,20 @@ pub fn show(
                         }
                         let active = ready && !editing && tile.module.is_active();
                         tile_glass(&painter, rect, theme, active, lift);
+                        if ready
+                            && !editing
+                            && let Some(line) = tile.module.edge_line()
+                        {
+                            edge_line(&ctx, &painter, rect, id, theme, line, now);
+                        }
+                        // Content on an active tile reads on-primary-container.
+                        let on_tile;
+                        let theme = if active {
+                            on_tile = theme.on_active_tile();
+                            &on_tile
+                        } else {
+                            theme
+                        };
                         if is_open {
                             painter.rect_stroke(
                                 rect.shrink(0.5),
@@ -750,7 +801,7 @@ pub fn show(
                             );
                         }
 
-                        let inner = tile_inner(rect, size);
+                        let inner = tile_inner(rect);
                         let mut child = ui.new_child(UiBuilder::new().max_rect(inner).id_salt(id));
                         if !held {
                             child.set_clip_rect(rect.intersect(clip));

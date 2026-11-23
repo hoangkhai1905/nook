@@ -13,8 +13,8 @@ use egui::{
 };
 use nook_platform::system;
 use nook_ui::bento::tile_header;
-use nook_ui::module::{Badge, Module, TileCtx, TileSize};
-use nook_ui::theme::{Theme, with_alpha};
+use nook_ui::module::{Badge, EdgeLine, Module, TileCtx, TileSize};
+use nook_ui::theme::Theme;
 use nook_ui::{icons, paint, widgets};
 use std::time::{Duration, Instant};
 
@@ -347,6 +347,27 @@ impl Module for Timer {
         self.clock.phase != Phase::Idle
     }
 
+    fn edge_line(&self) -> Option<EdgeLine> {
+        if self.clock.mode == Mode::Stopwatch {
+            return None;
+        }
+        let now = self.now();
+        let (progress, dim, pulse) = match self.clock.phase {
+            Phase::Idle => return None,
+            Phase::Finished => (1.0, false, true),
+            phase => {
+                // In step with the displayed second, so it moves once a second.
+                let left = self.clock.display_secs(now).ceil() / self.clock.duration().max(1.0);
+                (left as f32, matches!(phase, Phase::Paused { .. }), false)
+            }
+        };
+        Some(EdgeLine {
+            progress,
+            dim,
+            pulse,
+        })
+    }
+
     fn collapsed_badge(&self) -> Option<Badge> {
         let now = self.now();
         match self.clock.phase {
@@ -375,7 +396,7 @@ impl Module for Timer {
             // The pill shows the time too, so tick even when collapsed.
             return Some(Duration::from_secs_f64(wait + 0.005));
         }
-        // The finished ring pulses while the panel is open.
+        // The finished line pulses while the panel is open.
         (tile_visible && self.clock.phase == Phase::Finished).then(|| Duration::from_millis(33))
     }
 
@@ -413,29 +434,10 @@ impl Module for Timer {
             self.clock.set_mode(other.1);
         }
 
-        // Ring with the time inside.
+        // The time (the countdown line around the tile is drawn by the shell).
         let center = pos2(rect.center().x, rect.min.y + 50.0);
         let radius = 25.0;
         let finished = self.clock.phase == Phase::Finished;
-        let pulse = if finished {
-            ((ctx.now * 3.0).sin() * 0.5 + 0.5) as f32
-        } else {
-            1.0
-        };
-        let painter = ui.painter();
-        paint::ring(
-            painter,
-            center,
-            radius,
-            3.0,
-            if finished {
-                1.0
-            } else {
-                self.clock.progress(now)
-            },
-            with_alpha(theme.text_faint, 0.35),
-            with_alpha(theme.accent_fg(), 0.4 + 0.6 * pulse),
-        );
         let (text, color) = if finished {
             ("Done".to_owned(), theme.accent_fg())
         } else {

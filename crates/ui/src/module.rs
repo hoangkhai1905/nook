@@ -59,6 +59,18 @@ pub enum Badge {
     },
 }
 
+/// A line around a tile's edge that shrinks clockwise from the top centre.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct EdgeLine {
+    /// Fraction of the loop left, 0..1. Changes in steps; the shell glides
+    /// between them.
+    pub progress: f32,
+    /// Paused: drawn dim.
+    pub dim: bool,
+    /// Finished: the line pulses.
+    pub pulse: bool,
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ModuleStatus {
     Ready,
@@ -94,10 +106,15 @@ pub trait Module: Send {
     fn status(&self) -> ModuleStatus {
         ModuleStatus::Ready
     }
-    /// Active tiles get the accent gradient and the filled icon.
+    /// Active tiles get the primary-container fill and the filled icon.
     fn is_active(&self) -> bool {
         false
     }
+    /// A countdown line to draw around the tile's edge at any tile size.
+    fn edge_line(&self) -> Option<EdgeLine> {
+        None
+    }
+
     fn collapsed_badge(&self) -> Option<Badge> {
         None
     }
